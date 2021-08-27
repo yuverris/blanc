@@ -1,0 +1,8 @@
+[package]
+name = "blanc-rs"
+version = "0.1.0"
+edition = "2018"
+
+[lib]
+name = "blanc"
+path = "src/lib.rs"
