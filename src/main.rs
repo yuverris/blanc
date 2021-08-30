@@ -1,20 +1,19 @@
-use blanc::{Lexer, Parser};
+use blanc::{error::Error, eval::Eval, eval::Value, lexer::Lexer, parser::Parser};
+use std::f64::consts;
+
+fn eval(input: String) -> Result<Value, Error> {
+    let mut lexer = Lexer::new(input, None);
+    let tokens = lexer.lex().unwrap();
+    let mut iter = tokens.iter().peekable();
+    let mut parser = Parser::new(&mut iter);
+    let parsed = parser.parse()?;
+    let mut eval = Eval::new(parsed);
+    eval.eval()
+}
+
 fn main() {
-    let mut lexer = Lexer::new("!null == true".to_string());
-    match lexer.lex() {
-        Ok(tokens) => {
-            println!("{:?}", tokens);
-            let mut iter = tokens.iter().peekable();
-            let mut parser = Parser::new(&mut iter);
-            let expr = parser.parse();
-            match expr {
-                Ok(expr) => match expr.eval() {
-                    Ok(out) => println!("{:?}\n{}", expr, out.to_string()),
-                    Err(err) => eprintln!("error: {}", err),
-                },
-                Err(err) => eprintln!("error: {}", err),
-            }
-        }
-        Err(err) => eprintln!("error: {}", err),
-    }
+    match eval("-sqrt(25)+5".into()) {
+        Ok(v) => println!("{}", v),
+        Err(err) => eprintln!("{}", err),
+    };
 }

@@ -6,3 +6,4 @@ edition = "2018"
 [lib]
 name = "blanc"
 path = "src/lib.rs"
+doctest = false
