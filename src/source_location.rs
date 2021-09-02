@@ -9,8 +9,8 @@ impl SourceLocation {
     pub fn new(file: Option<String>) -> Self {
         Self {
             file: file,
-            line: 0,
-            column: 0,
+            line: 1,
+            column: 1,
         }
     }
 }

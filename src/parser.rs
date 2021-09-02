@@ -13,6 +13,7 @@ pub enum Expression {
     Bool(SourceLocation, bool),
     Number(SourceLocation, f64),
     Ident(SourceLocation, String),
+    Assign(SourceLocation, Box<Self>, Box<Self>),
     Null(SourceLocation),
 }
 
@@ -26,10 +27,10 @@ impl<'a> Parser<'a> {
     }
 
     pub fn primary(&mut self) -> error::Result<Expression> {
-        let (loc, token) = self.tokens.next().ok_or(Error::ParseError(
-            SourceLocation::new(None),
-            "unexpected end of input".into(),
-        ))?;
+        let (loc, token) = self
+            .tokens
+            .next()
+            .ok_or(Error::Error("unexpected end of input".to_string()))?;
         match token {
             Token::Op(Operator::Minus) => {
                 let op = Operator::Negative;
@@ -105,17 +106,31 @@ impl<'a> Parser<'a> {
                 }
             } else if self._match(&[Token::RParen]) {
                 let mut args = Vec::<Expression>::new();
-
-                if !self.check(&Token::LParen) {
-                    while {
+                if !self.check(&Token::LParen) || !self.check_current(&Token::LParen).1 {
+                    let mut curr = None::<&(SourceLocation, Token)>;
+                    loop {
                         args.push(self.expression(0)?);
-                        self.check_current(&Token::Comma)
-                    } {}
+                        let temp = self.check_current(&Token::Comma);
+                        curr = temp.0;
+                        if !temp.1 {
+                            break;
+                        }
+                    }
+                    match curr {
+                        Some((_, Token::LParen)) => (),
+                        Some((loc, _)) => {
+                            return Err(Error::SyntaxError(
+                                loc.clone(),
+                                "expected ')' after arguments list".to_string(),
+                            ))
+                        }
+                        _ => {
+                            return Err(Error::Error(
+                                "expected ')' after arguments list".to_string(),
+                            ))
+                        }
+                    };
                 }
-                self.consume(
-                    &Token::LParen,
-                    Error::SyntaxError(loc.clone(), "expected ')' after arguments list".into()),
-                );
                 lhs = Expression::FuncCall(loc.clone(), Box::new(lhs), args);
             } else {
                 break;
@@ -138,21 +153,23 @@ impl<'a> Parser<'a> {
         false
     }
 
-    fn check_current(&mut self, token_: &Token) -> bool {
-        matches!(self.tokens.nth(0), Some((_, token)) if token == token_)
+    fn check_current(&mut self, token_: &Token) -> (Option<&(SourceLocation, Token)>, bool) {
+        let token = self.tokens.nth(0);
+        (token, matches!(token, Some((_, token)) if token == token_))
     }
 
-    fn consume(&mut self, token: &Token, error: Error) -> error::Result<Token> {
-        if !self.check(token) {
-            Err(error)
-        } else {
-            let prev = self.tokens.nth(0).unwrap();
-            self.tokens.next();
-            Ok(prev.1.clone())
+    pub fn parse(&mut self) -> error::Result<Vec<Expression>> {
+        let mut exprs = vec![];
+        while let Some((loc, _)) = self.tokens.peek() {
+            let expr = self.expression(0)?;
+            if !self.check_current(&Token::Semicolon).1 {
+                return Err(Error::SyntaxError(
+                    loc.clone(),
+                    "expected ';' after statement".to_string(),
+                ));
+            }
+            exprs.push(expr)
         }
-    }
-
-    pub fn parse(&mut self) -> error::Result<Expression> {
-        self.expression(0)
+        Ok(exprs)
     }
 }

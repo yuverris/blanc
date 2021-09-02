@@ -32,7 +32,10 @@ pub enum Operator {
     Less,
     LessOrEqual,
     NotEqual,
+    And,
+    Or,
     Not,
+    Arrow,
     Assign,
     Factorial,
 }
@@ -40,7 +43,10 @@ pub enum Operator {
 impl Operator {
     pub fn precedence(&self) -> u8 {
         match self {
-            Operator::Assign => 1,
+            Operator::Assign | Operator::Arrow => 0,
+
+            Operator::And | Operator::Or => 1,
+
             Operator::Equal | Operator::NotEqual => 2,
 
             Operator::Greater
@@ -90,7 +96,6 @@ impl Lexer {
     pub fn lex(&mut self) -> error::Result<Vec<(SourceLocation, Token)>> {
         let mut out = Vec::<(SourceLocation, Token)>::new();
         let mut iter = self.input.chars().peekable();
-        let loc = self.loc.clone();
         macro_rules! add_token {
             ($e:expr) => {
                 out.push((self.loc.clone(), $e));
@@ -99,15 +104,16 @@ impl Lexer {
 
         while let Some(ch) = iter.next() {
             match ch {
-                'a'..='z' | 'A'..='Z' | '_' => {
+                c if c.is_alphabetic() || c == '_' => {
                     let mut ident = String::from(ch);
                     while let Some(&ch) = iter.peek() {
-                        if !ch.is_alphabetic() {
+                        if !ch.is_alphabetic() && !ch.is_ascii_digit() {
                             break;
                         }
                         ident.push(ch);
                         iter.next();
                     }
+                    self.loc.column += ident.len() - 1;
                     match ident.as_str() {
                         "true" => add_token!(Token::Bool(true)),
                         "false" => add_token!(Token::Bool(false)),
@@ -138,6 +144,7 @@ impl Lexer {
                         }
                         iter.next();
                     }
+                    self.loc.column += num.len();
                     add_token!(Token::Number(
                         format!("{}{}", ch, num)
                             .parse()
@@ -149,7 +156,14 @@ impl Lexer {
                 ',' => add_token!(Token::Comma),
                 '.' => add_token!(Token::Dot),
                 '+' => add_token!(Token::Op(Operator::Plus)),
-                '-' => add_token!(Token::Op(Operator::Minus)),
+                '-' => {
+                    if matches!(iter.peek(), Some(&c) if c == '>') {
+                        add_token!(Token::Op(Operator::Arrow));
+                        iter.next();
+                    } else {
+                        add_token!(Token::Op(Operator::Minus));
+                    }
+                }
                 '*' => add_token!(Token::Op(Operator::Star)),
                 '/' => add_token!(Token::Op(Operator::Slash)),
                 '^' => add_token!(Token::Op(Operator::Power)),
@@ -185,7 +199,16 @@ impl Lexer {
                         add_token!(Token::Op(Operator::Not));
                     }
                 }
-                '\n' => self.loc.line += 1,
+                '&' if matches!(iter.next(), Some(c) if c == '&') => {
+                    add_token!(Token::Op(Operator::And));
+                }
+                '|' if matches!(iter.next(), Some(c) if c == '|') => {
+                    add_token!(Token::Op(Operator::Or));
+                }
+                '\n' => {
+                    self.loc.column = 1;
+                    self.loc.line += 1;
+                }
                 ' ' => continue,
                 ';' => add_token!(Token::Semicolon),
                 _ => {

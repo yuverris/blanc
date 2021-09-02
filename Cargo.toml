@@ -1,9 +1,16 @@
 [package]
 name = "blanc-rs"
-version = "0.1.0"
+version = "0.1.0a0"
 edition = "2018"
+
+[dependencies]
+rustyline = "9.0.0"
 
 [lib]
 name = "blanc"
 path = "src/lib.rs"
 doctest = false
+
+[[bin]]
+name = "repl"
+path = "repl/main.rs"
