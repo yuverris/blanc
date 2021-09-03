@@ -129,6 +129,15 @@ impl Into<Value> for bool {
     }
 }
 
+impl<T: Into<Value>> Into<Value> for Option<T> {
+    fn into(self) -> Value {
+        match self {
+            Some(t) => t.into(),
+            None => Value::Null,
+        }
+    }
+}
+
 impl ToString for Value {
     fn to_string(&self) -> String {
         match self {
@@ -162,33 +171,32 @@ impl Context {
     /// construct a new Context with builtin math functions and constants
     pub fn with_builtins() -> Self {
         let mut ctx = Context::new();
-        ctx.var("pi".to_string(), consts::PI.into());
-        ctx.var('π'.to_string(), consts::PI.into());
-        ctx.var("tau".to_string(), consts::TAU.into());
-        ctx.var('τ'.to_string(), consts::TAU.into());
-        ctx.var("e".to_string(), consts::E.into());
-        ctx.var("inf".to_string(), f64::INFINITY.into());
-        ctx.var('∞'.to_string(), f64::INFINITY.into());
-        ctx.var("nan".to_string(), f64::NAN.into());
-        ctx.func1("sqrt".to_string(), f64::sqrt);
-        ctx.func1("cbrt".to_string(), f64::cbrt);
-        ctx.func1("ceil".to_string(), f64::ceil);
-        ctx.func1("floor".to_string(), f64::floor);
-        ctx.func1("round".to_string(), f64::round);
-        ctx.func1("cos".to_string(), f64::cos);
-        ctx.func1("sin".to_string(), f64::sin);
-        ctx.func1("tan".to_string(), f64::tan);
-        ctx.func1("acos".to_string(), f64::acos);
-        ctx.func1("asin".to_string(), f64::asin);
-        ctx.func1("atan".to_string(), f64::atan);
-        ctx.func2("atan2".to_string(), f64::atan2);
-        ctx.func1("cosh".to_string(), f64::cosh);
-        ctx.func1("sinh".to_string(), f64::sinh);
-        ctx.func1("tanh".to_string(), f64::tanh);
-        ctx.func1("abs".to_string(), f64::abs);
-        ctx.func2("log".to_string(), f64::log);
-        ctx.func1("log2".to_string(), f64::log2);
-        ctx.func1("log10".to_string(), f64::log10);
+        ctx.var("pi", consts::PI);
+        ctx.var('π', consts::PI);
+        ctx.var("tau", consts::TAU);
+        ctx.var('τ', consts::TAU);
+        ctx.var("e", consts::E);
+        ctx.var("inf", f64::INFINITY);
+        ctx.var("nan", f64::NAN);
+        ctx.func1("sqrt", f64::sqrt);
+        ctx.func1("cbrt", f64::cbrt);
+        ctx.func1("ceil", f64::ceil);
+        ctx.func1("floor", f64::floor);
+        ctx.func1("round", f64::round);
+        ctx.func1("cos", f64::cos);
+        ctx.func1("sin", f64::sin);
+        ctx.func1("tan", f64::tan);
+        ctx.func1("acos", f64::acos);
+        ctx.func1("asin", f64::asin);
+        ctx.func1("atan", f64::atan);
+        ctx.func2("atan2", f64::atan2);
+        ctx.func1("cosh", f64::cosh);
+        ctx.func1("sinh", f64::sinh);
+        ctx.func1("tanh", f64::tanh);
+        ctx.func1("abs", f64::abs);
+        ctx.func2("log", f64::log);
+        ctx.func1("log2", f64::log2);
+        ctx.func1("log10", f64::log10);
         ctx
     }
 
@@ -199,10 +207,14 @@ impl Context {
     /// ```rust
     /// use blanc::eval::{Context, Value};
     /// let mut ctx = Context::new();
-    /// ctx.var("foo".to_string(), Value::Number(5.0));
+    /// ctx.var("foo", 5.0);
     /// ```
-    pub fn var(&mut self, name: String, value: Value) {
-        self.variables.insert(name, value);
+    pub fn var<S, T>(&mut self, name: S, value: T)
+    where
+        S: ToString,
+        T: Into<Value>,
+    {
+        self.variables.insert(name.to_string(), value.into());
     }
 
     /// Fetch a variable
@@ -213,7 +225,7 @@ impl Context {
     /// use blanc::eval::{Context, Value};
     /// let mut ctx = Context::new();
     /// let name = String::from("foo");
-    /// ctx.var(name.clone(), Value::Number(5.0));
+    /// ctx.var(name.clone(), 5.0));
     /// assert_eq!(ctx.get(name.clone()), Some(&Value::Number(5.0)));
     /// ```
     pub fn get_var(&self, name: &String) -> Option<&Value> {
@@ -245,15 +257,17 @@ impl Context {
     /// fn main() {
     ///      use blanc::eval::{Context, Value};
     ///      let mut ctx = Context::new();
-    ///      ctx.func("get_five".to_string(), &function, 0);
+    ///      ctx.func("get_five".to_string(), function, 0);
     /// }
     /// ```
-    pub fn func(
+    pub fn func<S>(
         &mut self,
-        name: String,
+        name: S,
         func: &'static dyn Fn(&[Value]) -> Result<Value, String>,
         arg_count: usize,
-    ) {
+    ) where
+        S: ToString,
+    {
         let fnc = move |args: &[Value]| {
             if args.len() != arg_count {
                 Err(format!("umatched arguments count function requires {} arguments, you supplied {} arguments",
@@ -262,7 +276,7 @@ impl Context {
                 func(args)
             }
         };
-        self.functions.insert(name, Rc::new(fnc));
+        self.functions.insert(name.to_string(), Rc::new(fnc));
     }
 
     /// Adds a new function that accepts a single argument
@@ -277,11 +291,12 @@ impl Context {
     /// fn main() {
     ///      use blanc::eval::{Context, Value};
     ///      let mut ctx = Context::new();
-    ///      ctx.func1("add_two".to_string(), &function);
+    ///      ctx.func1("add_two".to_string(), function);
     /// }
     /// ```
-    pub fn func1<F, T, U>(&mut self, name: String, func: F)
+    pub fn func1<S, F, T, U>(&mut self, name: S, func: F)
     where
+        S: ToString,
         T: TryFrom<Value, Error = String>,
         U: Into<Value>,
         F: Fn(T) -> U + 'static,
@@ -296,7 +311,7 @@ impl Context {
                     .map_err(|_| "failed to convert function return type".to_string())
             }
         };
-        self.functions.insert(name, Rc::new(fnc));
+        self.functions.insert(name.to_string(), Rc::new(fnc));
     }
 
     /// Adds a new function that accepts two arguments
@@ -311,11 +326,12 @@ impl Context {
     /// fn main() {
     ///      use blanc::eval::{Context, Value};
     ///      let mut ctx = Context::new();
-    ///      ctx.func2("sum2".to_string(), &function);
+    ///      ctx.func2("sum2", function);
     /// }
     /// ```
-    pub fn func2<F, T, U, J>(&mut self, name: String, func: F)
+    pub fn func2<S, F, T, U, J>(&mut self, name: S, func: F)
     where
+        S: ToString,
         T: TryFrom<Value, Error = String>,
         U: TryFrom<Value, Error = String>,
         J: Into<Value>,
@@ -332,7 +348,7 @@ impl Context {
                     .map_err(|_| "failed to convert function return type".to_string())
             }
         };
-        self.functions.insert(name, Rc::new(fnc));
+        self.functions.insert(name.to_string(), Rc::new(fnc));
     }
 
     /// Adds a new function that accepts three arguments
@@ -347,11 +363,12 @@ impl Context {
     /// fn main() {
     ///      use blanc::eval::{Context, Value};
     ///      let mut ctx = Context::new();
-    ///      ctx.func3("sum3".to_string(), &function);
+    ///      ctx.func3("sum3", function);
     /// }
     /// ```
-    pub fn func3<F, T, U, J, V>(&mut self, name: String, func: F)
+    pub fn func3<S, F, T, U, J, V>(&mut self, name: String, func: F)
     where
+        S: ToString,
         T: TryFrom<Value, Error = String>,
         U: TryFrom<Value, Error = String>,
         J: TryFrom<Value, Error = String>,
@@ -385,11 +402,12 @@ impl Context {
     /// fn main() {
     ///      use blanc::eval::{Context, Value};
     ///      let mut ctx = Context::new();
-    ///      ctx.func4("sum4".to_string(), &function);
+    ///      ctx.func4("sum4", function);
     /// }
     /// ```
-    pub fn func4<F, T, U, J, V, Z>(&mut self, name: String, func: F)
+    pub fn func4<S, F, T, U, J, V, Z>(&mut self, name: S, func: F)
     where
+        S: ToString,
         T: TryFrom<Value, Error = String>,
         U: TryFrom<Value, Error = String>,
         J: TryFrom<Value, Error = String>,
@@ -410,7 +428,7 @@ impl Context {
                     .map_err(|_| "failed to convert function return type".to_string())
             }
         };
-        self.functions.insert(name, Rc::new(fnc));
+        self.functions.insert(name.to_string(), Rc::new(fnc));
     }
 
     /// Adds a new function that accepts five arguments
@@ -425,11 +443,12 @@ impl Context {
     /// fn main() {
     ///      use blanc::eval::{Context, Value};
     ///      let mut ctx = Context::new();
-    ///      ctx.func5("sum5".to_string(), &function);
+    ///      ctx.func5("sum5", function);
     /// }
     /// ```
-    pub fn func5<F, T, U, J, V, Z, Y>(&mut self, name: String, func: F)
+    pub fn func5<S, F, T, U, J, V, Z, Y>(&mut self, name: S, func: F)
     where
+        S: ToString,
         T: TryFrom<Value, Error = String>,
         U: TryFrom<Value, Error = String>,
         J: TryFrom<Value, Error = String>,
@@ -452,7 +471,7 @@ impl Context {
                     .map_err(|_| "failed to convert function return type".to_string())
             }
         };
-        self.functions.insert(name, Rc::new(fnc));
+        self.functions.insert(name.to_string(), Rc::new(fnc));
     }
 }
 
@@ -654,6 +673,20 @@ impl Eval {
                 }
                 self.context = previous;
                 Ok(out)
+            }
+
+            Expression::IfStmt(loc, box condition, box body, else_clause) => {
+                match self.eval_expr(condition)? {
+                    Value::Bool(true) => self.eval_expr(body),
+                    Value::Bool(false) => match else_clause {
+                        Some(box body) => self.eval_expr(body),
+                        None => Ok(Value::Null),
+                    },
+                    _ => Err(Error::RuntimeError(
+                        loc.clone(),
+                        "expected boolean in if condition".to_string(),
+                    )),
+                }
             }
 
             Expression::Binary(loc, Operator::Arrow, box lhs, box body) => match lhs {

@@ -99,6 +99,24 @@ impl<'a> Parser<'a> {
                     _ => Err(Error::Error("unexpected end of input".into())),
                 }
             }
+            Token::If => {
+                let condition = self.expression(0)?;
+                let body = self.expression(0)?;
+                let mut else_clause: Option<Box<Expression>> = None;
+                match self.tokens.peek() {
+                    Some((_, Token::Else)) => {
+                        self.tokens.next();
+                        else_clause = Some(Box::new(self.expression(0)?));
+                    }
+                    _ => (),
+                };
+                Ok(Expression::IfStmt(
+                    loc.clone(),
+                    Box::new(condition),
+                    Box::new(body),
+                    else_clause,
+                ))
+            }
             Token::Number(n) => Ok(Expression::Number(loc.clone(), *n)),
             Token::Ident(i) => Ok(Expression::Ident(loc.clone(), i.clone())),
             Token::Bool(b) => Ok(Expression::Bool(loc.clone(), *b)),

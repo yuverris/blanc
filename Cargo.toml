@@ -14,3 +14,4 @@ doctest = false
 [[bin]]
 name = "repl"
 path = "repl/main.rs"
+test = false

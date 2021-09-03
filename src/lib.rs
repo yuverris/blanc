@@ -133,4 +133,29 @@ mod tests {
         );
         Ok(())
     }
+    #[test]
+    fn rust_integration() -> Result<(), String> {
+        let mut ctx = crate::eval::Context::new();
+        ctx.func2("add", |x: f64, y: f64| x + y);
+        ctx.var("x", 1.);
+        ctx.var("y", 2.);
+        assert_eq!(
+            crate::evaluate("add(x, y);".to_string(), None, Some(ctx))?,
+            "3"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn if_stmts() -> Result<(), String> {
+        assert_eq!(
+            crate::evaluate(
+                "fact(x) -> if x <= 1 x else x*fact(x-1); fact(5);".to_string(),
+                None,
+                None
+            )?,
+            "120"
+        );
+        Ok(())
+    }
 }
