@@ -1,6 +1,6 @@
 [package]
 name = "blanc-rs"
-version = "0.1.0a0"
+version = "0.1.0-alpha"
 edition = "2018"
 
 [dependencies]
