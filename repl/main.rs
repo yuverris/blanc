@@ -17,7 +17,7 @@ fn main() -> std::io::Result<()> {
         if input == "quit" {
             break;
         }
-        let mut lexer = Lexer::new(input, None);
+        let mut lexer = Lexer::new(input, Some("repl".to_string()));
         let tokens = match lexer.lex() {
             Ok(tokens) => tokens,
             Err(err) => {
