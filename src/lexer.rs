@@ -8,6 +8,10 @@ pub enum Token {
     Number(f64),
     Ident(String),
     Bool(bool),
+    If,
+    Else,
+    RBracket,
+    LBracket,
     Null,
     Comma,
     LParen,
@@ -117,6 +121,8 @@ impl Lexer {
                     match ident.as_str() {
                         "true" => add_token!(Token::Bool(true)),
                         "false" => add_token!(Token::Bool(false)),
+                        "if" => add_token!(Token::If),
+                        "else" => add_token!(Token::Else),
                         "null" => add_token!(Token::Null),
                         _ => add_token!(Token::Ident(ident)),
                     }
@@ -153,6 +159,8 @@ impl Lexer {
                 }
                 '(' => add_token!(Token::RParen),
                 ')' => add_token!(Token::LParen),
+                '{' => add_token!(Token::RBracket),
+                '}' => add_token!(Token::LBracket),
                 ',' => add_token!(Token::Comma),
                 '.' => add_token!(Token::Dot),
                 '+' => add_token!(Token::Op(Operator::Plus)),

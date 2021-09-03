@@ -34,7 +34,7 @@ pub fn evaluate(
 ) -> Result<String, String> {
     use crate::{eval::Eval, lexer::Lexer, parser::Parser};
     let mut lexer = Lexer::new(input, file);
-    let tokens = lexer.lex().unwrap();
+    let tokens = lexer.lex().map_err(|err| err.to_string())?;
     let mut iter = tokens.iter().peekable();
     let mut parser = Parser::new(&mut iter);
     let parsed = match parser.parse() {

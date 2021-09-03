@@ -5,15 +5,7 @@ use crate::{
     source_location::SourceLocation,
 };
 
-use std::{
-    cmp::{Ordering, PartialEq, PartialOrd},
-    collections::HashMap,
-    convert::TryFrom,
-    f64::consts,
-    fmt,
-    rc::Rc,
-    string::ToString,
-};
+use std::{collections::HashMap, convert::TryFrom, f64::consts, fmt, rc::Rc, string::ToString};
 /// Enum for handling objects
 ///
 /// # Example
@@ -26,9 +18,13 @@ use std::{
 /// ```
 #[derive(Clone)]
 pub enum Value {
+    /// for representing numeric values
     Number(f64),
+    /// for representing boolean values
     Bool(bool),
+    /// for representing binded functions
     Func(FunctionType),
+    /// for representing user defined functions
     UserFunc {
         params: Vec<String>,
         body: Expression,
@@ -56,8 +52,8 @@ impl Callable for Value {
                         ),
                     ));
                 }
-                /// store old state of the context and bind parameters names to the current context
-                /// then reset the context to its old state after function call
+                // store old state of the context and bind parameters names to the current context
+                // then reset the context to its old state after function call
                 let context = eval.get_context_mut();
                 let previous = context.clone();
                 for (param, arg) in params.into_iter().zip(args) {
@@ -462,8 +458,11 @@ impl Context {
 
 /// struct for evaluating expressions
 pub struct Eval {
+    /// list of expressions to evaluate
     expr: Vec<Expression>,
+    /// context to lookup for variables/functions
     context: Context,
+    /// maximum precision that a number can hold
     max_precision: f64,
 }
 
@@ -472,6 +471,15 @@ impl Eval {
     pub fn new(expr: Vec<Expression>) -> Self {
         Self {
             expr: expr,
+            context: Context::with_builtins(),
+            max_precision: 1e8,
+        }
+    }
+
+    /// constructs a new empty Eval with builtin context
+    pub fn new_empty() -> Self {
+        Self {
+            expr: Vec::new(),
             context: Context::with_builtins(),
             max_precision: 1e8,
         }
@@ -632,6 +640,21 @@ impl Eval {
                     "invalid assign syntax".to_string(),
                 )),
             },
+
+            Expression::Block(_, stmts) => {
+                let previous = self.context.clone();
+                let mut iter = stmts.into_iter();
+                let next: Expression = match iter.next() {
+                    Some(expr) => expr.clone(),
+                    None => return Ok(Value::Null),
+                };
+                let mut out: Value = self.eval_expr(&next)?;
+                for expr in iter {
+                    out = self.eval_expr(expr)?;
+                }
+                self.context = previous;
+                Ok(out)
+            }
 
             Expression::Binary(loc, Operator::Arrow, box lhs, box body) => match lhs {
                 Expression::FuncCall(_, box expr, args) => {
@@ -941,6 +964,10 @@ impl Eval {
                 ),
             )),
         }
+    }
+
+    pub fn set_input(&mut self, input: Vec<Expression>) {
+        self.expr = input;
     }
 
     pub fn eval(&mut self) -> error::Result<Value> {

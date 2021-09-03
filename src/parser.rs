@@ -1,3 +1,4 @@
+#![allow(unused_assignments)]
 use crate::{
     error::{self, Error},
     lexer::{Operator, Token},
@@ -14,6 +15,8 @@ pub enum Expression {
     Number(SourceLocation, f64),
     Ident(SourceLocation, String),
     Assign(SourceLocation, Box<Self>, Box<Self>),
+    IfStmt(SourceLocation, Box<Self>, Box<Self>, Option<Box<Self>>),
+    Block(SourceLocation, Vec<Self>),
     Null(SourceLocation),
 }
 
@@ -71,6 +74,31 @@ impl<'a> Parser<'a> {
                     _ => Err(Error::Error("unexpected end of input".into())),
                 }
             }
+            Token::RBracket => {
+                let mut stmts = vec![];
+                while !self.check(&Token::LBracket) {
+                    let stmt = self.expression(0)?;
+                    if !self.check_current(&Token::Semicolon).1 {
+                        return Err(Error::SyntaxError(
+                            loc.clone(),
+                            "expected ';' after statement".to_string(),
+                        ));
+                    }
+                    stmts.push(stmt)
+                }
+                match self.tokens.next() {
+                    Some((_, Token::LBracket)) => {
+                        return Ok(Expression::Block(loc.clone(), stmts));
+                    }
+                    Some((loc, _)) => {
+                        return Err(Error::SyntaxError(
+                            loc.clone(),
+                            "expected closing parenthese '}' after block".into(),
+                        ));
+                    }
+                    _ => Err(Error::Error("unexpected end of input".into())),
+                }
+            }
             Token::Number(n) => Ok(Expression::Number(loc.clone(), *n)),
             Token::Ident(i) => Ok(Expression::Ident(loc.clone(), i.clone())),
             Token::Bool(b) => Ok(Expression::Bool(loc.clone(), *b)),
@@ -106,6 +134,7 @@ impl<'a> Parser<'a> {
                 }
             } else if self._match(&[Token::RParen]) {
                 let mut args = Vec::<Expression>::new();
+
                 if !self.check(&Token::LParen) || !self.check_current(&Token::LParen).1 {
                     let mut curr = None::<&(SourceLocation, Token)>;
                     loop {
