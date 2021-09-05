@@ -5,11 +5,27 @@ use crate::{
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub enum Token {
-    Number(f64),
+    Number(i128),
+    Float(f64),
     Ident(String),
     Bool(bool),
+    Char(char),
+    String(String),
+    DoubleQuote,
+    SingleQuote,
+    Fnc,
+    Break,
+    Return,
+    Continue,
+    While,
+    For,
+    Lm,
+    Let,
+    Imm,
     If,
     Else,
+    RBrace,
+    LBrace,
     RBracket,
     LBracket,
     Null,
@@ -29,7 +45,10 @@ pub enum Operator {
     Minus,
     Star,
     Slash,
-    Power,
+    BitOr,
+    BitXor,
+    BitAnd,
+    BitNot,
     Equal,
     Greater,
     GreaterOrEqual,
@@ -38,50 +57,54 @@ pub enum Operator {
     NotEqual,
     And,
     Or,
+    Remainder,
+    LShift,
+    RShift,
     Not,
-    Arrow,
     Assign,
-    Factorial,
 }
 
 impl Operator {
     pub fn precedence(&self) -> u8 {
         match self {
-            Operator::Assign | Operator::Arrow => 0,
+            Operator::Assign => 10,
 
-            Operator::And | Operator::Or => 1,
+            Operator::Or => 11,
+            Operator::And => 12,
 
-            Operator::Equal | Operator::NotEqual => 2,
+            Operator::BitOr => 13,
+            Operator::BitXor => 14,
+            Operator::BitAnd => 15,
+
+            Operator::Equal | Operator::NotEqual => 16,
 
             Operator::Greater
             | Operator::GreaterOrEqual
             | Operator::Less
-            | Operator::LessOrEqual => 3,
+            | Operator::LessOrEqual => 17,
 
-            Operator::Minus | Operator::Plus => 4,
+            Operator::LShift | Operator::RShift => 18,
 
-            Operator::Negative | Operator::Positive | Operator::Not => 5,
+            Operator::Minus | Operator::Plus => 19,
 
-            Operator::Star | Operator::Slash => 6,
+            Operator::Star | Operator::Slash | Operator::Remainder => 20,
 
-            Operator::Power => 7,
-            Operator::Factorial => 8,
+            Operator::Negative | Operator::Positive | Operator::Not | Operator::BitNot => 21,
         }
     }
 
     pub fn is_binary(&self) -> bool {
-        match self {
-            Operator::Negative | Operator::Positive | Operator::Not => false,
-            _ => true,
-        }
+        !matches!(
+            self,
+            Operator::Not | Operator::Negative | Operator::Positive | Operator::BitNot
+        )
     }
 
-    pub fn is_postfix_unary(&self) -> bool {
-        match self {
-            // since '!' is first seen as a not operator
-            Operator::Not => true,
-            _ => false,
-        }
+    pub fn is_prefix_unary(&self) -> bool {
+        matches!(
+            self,
+            Operator::Not | Operator::Negative | Operator::Positive | Operator::BitNot
+        )
     }
 }
 pub struct Lexer {
@@ -92,7 +115,7 @@ pub struct Lexer {
 impl Lexer {
     pub fn new(input: String, file: Option<String>) -> Self {
         Self {
-            input: input,
+            input,
             loc: SourceLocation::new(file),
         }
     }
@@ -124,15 +147,22 @@ impl Lexer {
                         "if" => add_token!(Token::If),
                         "else" => add_token!(Token::Else),
                         "null" => add_token!(Token::Null),
+                        "fnc" => add_token!(Token::Fnc),
+                        "continue" => add_token!(Token::Continue),
+                        "break" => add_token!(Token::Break),
+                        "return" => add_token!(Token::Return),
+                        "let" => add_token!(Token::Let),
+                        "imm" => add_token!(Token::Imm),
+                        "lm" => add_token!(Token::Lm),
                         _ => add_token!(Token::Ident(ident)),
                     }
                 }
                 '0'..='9' => {
                     let mut num: String = String::new();
                     while let Some(&c) = iter.peek() {
-                        if c.is_ascii_digit() {
-                            num.push(c);
-                        } else if c == 'e' || c == '.' {
+                        if matches!(c, c if c.is_ascii_digit() ||
+                            c == 'e' || c == '.')
+                        {
                             num.push(c);
                         } else if c == '-' {
                             match num.chars().last() {
@@ -151,30 +181,36 @@ impl Lexer {
                         iter.next();
                     }
                     self.loc.column += num.len();
-                    add_token!(Token::Number(
-                        format!("{}{}", ch, num)
-                            .parse()
-                            .expect("invalid number format"),
-                    ));
+                    let mut number = format!("{}{}", ch, num);
+                    let is_float =
+                        !number.ends_with('.') && number.chars().any(|e| matches!(e, '.' | 'e'));
+                    if is_float {
+                        add_token!(Token::Float(number.parse().expect("invalid number format"),));
+                    } else if number.ends_with('.') {
+                        number.pop();
+                        add_token!(Token::Number(
+                            number.parse().expect("invalid number format"),
+                        ));
+                        add_token!(Token::Dot);
+                    } else {
+                        add_token!(Token::Number(
+                            number.parse().expect("invalid number format"),
+                        ));
+                    }
                 }
                 '(' => add_token!(Token::RParen),
                 ')' => add_token!(Token::LParen),
-                '{' => add_token!(Token::RBracket),
-                '}' => add_token!(Token::LBracket),
+                '{' => add_token!(Token::RBrace),
+                '}' => add_token!(Token::LBrace),
+                '[' => add_token!(Token::RBracket),
+                ']' => add_token!(Token::LBracket),
                 ',' => add_token!(Token::Comma),
                 '.' => add_token!(Token::Dot),
                 '+' => add_token!(Token::Op(Operator::Plus)),
-                '-' => {
-                    if matches!(iter.peek(), Some(&c) if c == '>') {
-                        add_token!(Token::Op(Operator::Arrow));
-                        iter.next();
-                    } else {
-                        add_token!(Token::Op(Operator::Minus));
-                    }
-                }
+                '-' => add_token!(Token::Op(Operator::Minus)),
                 '*' => add_token!(Token::Op(Operator::Star)),
                 '/' => add_token!(Token::Op(Operator::Slash)),
-                '^' => add_token!(Token::Op(Operator::Power)),
+                '^' => add_token!(Token::Op(Operator::BitXor)),
                 '=' => {
                     if matches!(iter.peek(), Some(&c) if c == '=') {
                         add_token!(Token::Op(Operator::Equal));
@@ -207,11 +243,46 @@ impl Lexer {
                         add_token!(Token::Op(Operator::Not));
                     }
                 }
-                '&' if matches!(iter.next(), Some(c) if c == '&') => {
-                    add_token!(Token::Op(Operator::And));
+                '&' => {
+                    if matches!(iter.next(), Some(c) if c == '&') {
+                        add_token!(Token::Op(Operator::And));
+                    } else {
+                        add_token!(Token::Op(Operator::BitAnd));
+                    }
                 }
-                '|' if matches!(iter.next(), Some(c) if c == '|') => {
-                    add_token!(Token::Op(Operator::Or));
+                '\'' => {
+                    let c: char = iter.next().ok_or_else(|| {
+                        Error::SyntaxError(
+                            self.loc.clone(),
+                            "expected character literal after \"'\"".to_string(),
+                        )
+                    })?;
+                    match iter.next() {
+                        Some('\'') => add_token!(Token::Char(c)),
+                        _ => {
+                            return Err(Error::SyntaxError(
+                                self.loc.clone(),
+                                "expected closing \"'\"".to_string(),
+                            ))
+                        }
+                    };
+                }
+                '"' => {
+                    let mut out: String = String::new();
+                    while let Some(c) = iter.next() {
+                        if c == '"' {
+                            break;
+                        }
+                        out.push(c);
+                    }
+                    add_token!(Token::String(out));
+                }
+                '|' => {
+                    if matches!(iter.next(), Some(c) if c == '|') {
+                        add_token!(Token::Op(Operator::Or));
+                    } else {
+                        add_token!(Token::Op(Operator::BitOr));
+                    }
                 }
                 '\n' => {
                     self.loc.column = 1;

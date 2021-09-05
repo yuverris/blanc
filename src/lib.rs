@@ -1,4 +1,4 @@
-#![feature(box_syntax, box_patterns)]
+#![feature(box_syntax, box_patterns, iter_intersperse)]
 
 //! Blanc math interpreter written in Rust with an easy to use API
 
@@ -12,9 +12,11 @@ pub mod lexer;
 pub mod parser;
 /// module for source location for better and helpful error messages
 pub mod source_location;
+/// module for utilties
+pub mod utils;
 
 /// blanc current version
-pub static VERSION: &'static str = env!("CARGO_PKG_VERSION");
+pub static VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// function for evaluating expressions
 ///
@@ -72,14 +74,12 @@ mod tests {
 
     #[test]
     fn basic_arithmetic() -> Result<(), Error> {
-        assert_eq!(eval("5 * 2 + 2;".to_string())?, Value::Number(12.0));
-        assert_eq!(eval("5 * (2 + 2);".to_string())?, Value::Number(20.0));
-        assert_eq!(eval("-2 / 2 + 1 * 4;".to_string())?, Value::Number(3.0));
-        assert_eq!(eval("1e-3 * 1e5;".to_string())?, Value::Number(100.0));
-        assert_eq!(eval("5^2 - 3;".to_string())?, Value::Number(22.0));
-        assert_eq!(eval("3.04 - 2.90;".to_string())?, Value::Number(0.14));
-        assert_eq!(eval("1.0 + 2.0;".to_string())?, Value::Number(3.0));
-        assert_eq!(eval("5!;".to_string())?, Value::Number(120.0));
+        assert_eq!(eval("5 * 2 + 2;".to_string())?, Value::Number(12));
+        assert_eq!(eval("5 * (2 + 2);".to_string())?, Value::Number(20));
+        assert_eq!(eval("-2 / 2 + 1 * 4;".to_string())?, Value::Number(3));
+        assert_eq!(eval("1e-3 * 1e5;".to_string())?, Value::Float(100f64));
+        assert_eq!(eval("3.04 - 2.90;".to_string())?, Value::Float(3.04 - 2.90));
+        assert_eq!(eval("1.0 + 2.0;".to_string())?, Value::Float(3f64));
         Ok(())
     }
 
@@ -87,8 +87,6 @@ mod tests {
     fn comparison_logical_operators() -> Result<(), Error> {
         assert_eq!(eval("5 == 5;".to_string())?, Value::Bool(true));
         assert_eq!(eval("5 != 5;".to_string())?, Value::Bool(false));
-        assert_eq!(eval("nan == nan;".to_string())?, Value::Bool(false));
-        assert_eq!(eval("nan != nan;".to_string())?, Value::Bool(true));
         assert_eq!(eval("5 < 5;".to_string())?, Value::Bool(false));
         assert_eq!(eval("5 <= 5;".to_string())?, Value::Bool(true));
         assert_eq!(eval("5 > 5;".to_string())?, Value::Bool(false));
@@ -105,40 +103,30 @@ mod tests {
 
     #[test]
     fn syntax() -> Result<(), Error> {
-        assert_eq!(eval("------1 + +--2;".to_string())?, Value::Number(3.0));
+        assert_eq!(eval("------1 + +--2;".to_string())?, Value::Number(3));
         assert_eq!(
             eval("(-(-(-(-(-(-(-(-(-(-(-(-(1)))))))))))));".to_string())?,
-            Value::Number(1.0)
+            Value::Number(1)
         );
         Ok(())
     }
 
     #[test]
     fn variables() -> Result<(), Error> {
-        assert_eq!(eval("x = 5; x * 2;".to_string())?, Value::Number(10.0));
+        assert_eq!(eval("let x = 5; x * 2;".to_string())?, Value::Number(10));
         assert_eq!(
-            eval("x = 5; y = x; x = 3; y+x;".to_string())?,
-            Value::Number(8.0)
+            eval("let x = 5; let y = x; let x = 3; y+x;".to_string())?,
+            Value::Number(8)
         );
         Ok(())
     }
 
     #[test]
-    fn functions() -> Result<(), Error> {
-        assert_eq!(eval("sqrt(25);".to_string())?, Value::Number(5.0));
-        assert_eq!(eval("sin(π/2);".to_string())?, Value::Number(1.0));
-        assert_eq!(
-            eval("sum(x, y, z) -> x + y + z; sum(1,2,3);".to_string())?,
-            Value::Number(6.0)
-        );
-        Ok(())
-    }
-    #[test]
     fn rust_integration() -> Result<(), String> {
         let mut ctx = crate::eval::Context::new();
-        ctx.func2("add", |x: f64, y: f64| x + y);
-        ctx.var("x", 1.);
-        ctx.var("y", 2.);
+        ctx.func2("add", |x: i128, y: i128| x + y);
+        ctx.var("x", 1, true);
+        ctx.var("y", 2, true);
         assert_eq!(
             crate::evaluate("add(x, y);".to_string(), None, Some(ctx))?,
             "3"
@@ -148,12 +136,15 @@ mod tests {
 
     #[test]
     fn if_stmts() -> Result<(), String> {
+        let input = r#"fnc fact(x) {
+        if x <= 1 {
+            return x;
+        } else {"
+            return x*fact(x-1);
+        }
+}"#;
         assert_eq!(
-            crate::evaluate(
-                "fact(x) -> if x <= 1 x else x*fact(x-1); fact(5);".to_string(),
-                None,
-                None
-            )?,
+            crate::evaluate(format!("{}; fact(5);", input), None, None)?,
             "120"
         );
         Ok(())

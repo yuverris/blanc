@@ -1,7 +1,2 @@
-# blanc-rs
-A WIP rewrite of the ami math parser 
-
-## docs
-
-soon™
-
+# blanc
+yet another (WIP) programming language

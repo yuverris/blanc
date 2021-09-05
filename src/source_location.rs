@@ -8,7 +8,7 @@ pub struct SourceLocation {
 impl SourceLocation {
     pub fn new(file: Option<String>) -> Self {
         Self {
-            file: file,
+            file,
             line: 1,
             column: 1,
         }
