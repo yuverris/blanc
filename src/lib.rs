@@ -55,7 +55,7 @@ pub fn evaluate(
         Result::Ok(tok) => tok,
         Result::Err(err) => return Err(err),
     };
-    let mut iter = tokens.iter().peekable();
+    let iter = tokens.iter().peekable();
     let mut parser = Parser::new(iter);
     let parsed = match parser.parse() {
         Result::Ok(out) => out,

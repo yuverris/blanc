@@ -28,7 +28,7 @@ fn repl() -> std::io::Result<()> {
                 continue;
             }
         };
-        let mut iter = tokens.iter().peekable();
+        let iter = tokens.iter().peekable();
         let mut parser = Parser::new(iter);
         let parsed = match parser.parse() {
             Ok(out) => out,

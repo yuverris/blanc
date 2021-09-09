@@ -1,7 +1,28 @@
 let x = 1;
+let y = 2;
 
-while x <= 100 {
-    x = x + 1;
+let z = x + y;
+print(x, '+', y, '=', z);
+
+fnc get_1() {
+    return 1;
 };
+fnc get_2() {
+    return 2;
+};
+print(get_1() + get_2());
 
-print(x);
+fnc fact(x) {
+   if x <= 1 {
+      return x;
+   } else {
+      return x*fact(x-1);
+   };
+};
+print(fact(5));
+
+let x = 0;
+while x < 100 {
+   x = x + 1;
+};
+print("x =", x);

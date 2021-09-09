@@ -7,7 +7,7 @@ use crate::{
     utils::{FloatExt, RResult},
 };
 
-use std::{collections::HashMap, convert::TryFrom, fmt, lazy::SyncLazy, rc::Rc, string::ToString};
+use std::{collections::HashMap, convert::TryFrom, fmt, rc::Rc, string::ToString};
 /// Enum for handling objects
 ///
 /// # Example
@@ -55,6 +55,50 @@ macro_rules! unwrap_result {
     };
 }
 
+/// main trait for defining callable objects
+pub trait Callable {
+    fn call(&self, args: Vec<Value>, loc: SourceLocation, eval: &mut Eval) -> ResultType;
+}
+
+impl Callable for Value {
+    fn call(&self, args: Vec<Value>, loc: SourceLocation, eval: &mut Eval) -> ResultType {
+        match self {
+            Value::Func(fnc) => {
+                let out =
+                    unwrap_result!(fnc(&args[..]).map_err(|err| Error::RuntimeError(loc, err)));
+                ResultType::Ok(out)
+            }
+
+            Value::UserFunc { params, body } => {
+                if params.len() != args.len() {
+                    return ResultType::Err(Error::RuntimeError(
+                        loc,
+                        format!(
+                            "function requires {} arguments, you supplied {}",
+                            params.len(),
+                            args.len()
+                        ),
+                    ));
+                }
+                // store old state of the context and bind parameters names to the current context
+                // then reset the context to its old state after function call
+                let context = eval.get_context_mut();
+                let previous = context.clone();
+                for (param, arg) in params.iter().zip(args) {
+                    context.var(param.clone(), arg, false);
+                }
+                let out = eval.eval_expr(body);
+                eval.set_context(previous);
+                out
+            }
+
+            _ => ResultType::Err(Error::TypeError(
+                loc,
+                format!("{} isn't a callable object", self.get_type()),
+            )),
+        }
+    }
+}
 impl FloatExt for f64 {
     fn approx_eq(self, other: Self) -> bool {
         (self - other).abs() < f64::EPSILON
@@ -255,7 +299,7 @@ impl ToString for Value {
     }
 }
 
-type FunctionType = Rc<dyn FnMut(&[Value]) -> Result<Value, String>>;
+type FunctionType = Rc<dyn Fn(&[Value]) -> Result<Value, String>>;
 
 #[derive(Clone)]
 pub struct VariableHandle {
@@ -663,22 +707,22 @@ impl Eval {
     }
 
     /// get a reference to eval's context
-    pub fn get_context(&'static self) -> &Context {
+    pub fn get_context(&self) -> &Context {
         &self.context
     }
 
     /// get a mutable reference to eval's context
-    pub fn get_context_mut(&'static mut self) -> &mut Context {
+    pub fn get_context_mut(&mut self) -> &mut Context {
         &mut self.context
     }
 
     /// set eval's context
-    pub fn set_context(&'static mut self, ctx: Context) {
+    pub fn set_context(&mut self, ctx: Context) {
         self.context = ctx;
     }
 
     /// main function for evaluation expressions
-    pub fn eval_expr(&'static mut self, expr: &Expression) -> ResultType {
+    pub fn eval_expr(&mut self, expr: &Expression) -> ResultType {
         use RResult::*;
         match expr {
             Expression::Float(_, x) => Ok(Value::Float(*x)),
@@ -714,9 +758,9 @@ impl Eval {
                     let temp = try_err!(self.eval_expr(arg));
                     _args.push(temp);
                 }
-                self.call(target, _args, loc.clone())
+                target.call(_args, loc.clone(), self)
             }
-            Expression::FuncDef(loc, name, args, box body) => {
+            Expression::FuncDef(_, name, args, box body) => {
                 let function = Value::UserFunc {
                     params: args.clone(),
                     body: body.clone(),
@@ -827,7 +871,8 @@ impl Eval {
             }
 
             // member access operator: target.value
-            Expression::Binary(loc, Operator::Dot, box lhs, box rhs) => {
+            // TODO: figure out a way to implement this
+            /*Expression::Binary(loc, Operator::Dot, box lhs, box rhs) => {
                 let temp_lhs = try_err!(self.eval_expr(lhs));
                 let temp_rhs = match rhs {
                     Expression::Ident(_, name) => name.clone(),
@@ -839,8 +884,7 @@ impl Eval {
                     }
                 };
                 self.member_access(temp_lhs, temp_rhs, loc.clone())
-            }
-
+            }*/
             Expression::Binary(loc, Operator::Assign, box lhs, box rhs) => {
                 let name = match lhs {
                     Expression::Ident(_, name) => name,
@@ -988,7 +1032,7 @@ impl Eval {
         }
     }
 
-    pub fn add(&'static self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
+    pub fn add(&self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
         use RResult::*;
         match (&lhs, &rhs) {
             (Value::Number(n), Value::Number(m)) => {
@@ -1014,7 +1058,7 @@ impl Eval {
         }
     }
 
-    pub fn sub(&'static self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
+    pub fn sub(&self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
         use RResult::*;
         match (&lhs, &rhs) {
             (Value::Number(n), Value::Number(m)) => {
@@ -1046,7 +1090,7 @@ impl Eval {
         }
     }
 
-    pub fn div(&'static self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
+    pub fn div(&self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
         use RResult::*;
         match (&lhs, &rhs) {
             (Value::Number(n), Value::Number(m)) => {
@@ -1078,7 +1122,7 @@ impl Eval {
         }
     }
 
-    pub fn mul(&'static self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
+    pub fn mul(&self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
         use RResult::*;
         match (&lhs, &rhs) {
             (Value::Number(n), Value::Number(m)) => {
@@ -1104,7 +1148,7 @@ impl Eval {
         }
     }
 
-    pub fn bit_xor(&'static self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
+    pub fn bit_xor(&self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
         use RResult::*;
         match (&lhs, &rhs) {
             (Value::Number(n), Value::Number(m)) => Ok(Value::from(*n ^ *m)),
@@ -1119,7 +1163,7 @@ impl Eval {
         }
     }
 
-    pub fn bit_or(&'static self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
+    pub fn bit_or(&self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
         use RResult::*;
         match (&lhs, &rhs) {
             (Value::Number(n), Value::Number(m)) => Ok(Value::from(*n | *m)),
@@ -1134,7 +1178,7 @@ impl Eval {
         }
     }
 
-    pub fn bit_and(&'static self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
+    pub fn bit_and(&self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
         use RResult::*;
         match (&lhs, &rhs) {
             (Value::Number(n), Value::Number(m)) => Ok(Value::from(*n & *m)),
@@ -1149,7 +1193,7 @@ impl Eval {
         }
     }
 
-    pub fn bit_not(&'static self, rhs: Value, loc: SourceLocation) -> ResultType {
+    pub fn bit_not(&self, rhs: Value, loc: SourceLocation) -> ResultType {
         use RResult::*;
         match &rhs {
             Value::Number(n) => Ok(Value::from(!*n)),
@@ -1164,7 +1208,7 @@ impl Eval {
         }
     }
 
-    pub fn neg(&'static self, lhs: Value, loc: SourceLocation) -> ResultType {
+    pub fn neg(&self, lhs: Value, loc: SourceLocation) -> ResultType {
         use RResult::*;
         match &lhs {
             Value::Float(n) => Ok(Value::from(-n)),
@@ -1179,7 +1223,7 @@ impl Eval {
         }
     }
 
-    pub fn not(&'static self, lhs: Value, loc: SourceLocation) -> ResultType {
+    pub fn not(&self, lhs: Value, loc: SourceLocation) -> ResultType {
         use RResult::*;
         match &lhs {
             Value::Bool(b) => Ok(Value::Bool(!b)),
@@ -1193,7 +1237,7 @@ impl Eval {
         }
     }
 
-    pub fn equals(&'static self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
+    pub fn equals(&self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
         use RResult::*;
         match (&lhs, &rhs) {
             (Value::Number(n), Value::Number(u)) => Ok(Value::Bool(n == u)),
@@ -1211,7 +1255,7 @@ impl Eval {
         }
     }
 
-    pub fn not_equals(&'static self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
+    pub fn not_equals(&self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
         use RResult::*;
         match (&lhs, &rhs) {
             (Value::Number(n), Value::Number(u)) => Ok(Value::Bool(n != u)),
@@ -1229,7 +1273,7 @@ impl Eval {
         }
     }
 
-    pub fn greater(&'static self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
+    pub fn greater(&self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
         use RResult::*;
         match (&lhs, &rhs) {
             (Value::Float(n), Value::Float(u)) => Ok(Value::Bool(n > u)),
@@ -1247,12 +1291,7 @@ impl Eval {
         }
     }
 
-    pub fn greater_or_equal(
-        &'static self,
-        lhs: Value,
-        rhs: Value,
-        loc: SourceLocation,
-    ) -> ResultType {
+    pub fn greater_or_equal(&self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
         use RResult::*;
         match (&lhs, &rhs) {
             (Value::Float(n), Value::Float(u)) => Ok(Value::Bool(n >= u)),
@@ -1270,7 +1309,7 @@ impl Eval {
         }
     }
 
-    pub fn less(&'static self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
+    pub fn less(&self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
         use RResult::*;
         match (&lhs, &rhs) {
             (Value::Float(n), Value::Float(u)) => Ok(Value::Bool(n < u)),
@@ -1288,7 +1327,7 @@ impl Eval {
         }
     }
 
-    pub fn less_or_equal(&'static self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
+    pub fn less_or_equal(&self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
         use RResult::*;
         match (&lhs, &rhs) {
             (Value::Float(n), Value::Float(u)) => Ok(Value::Bool(n <= u)),
@@ -1306,7 +1345,7 @@ impl Eval {
         }
     }
 
-    pub fn and(&'static self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
+    pub fn and(&self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
         use RResult::*;
         match (&lhs, &rhs) {
             (Value::Bool(n), Value::Bool(u)) => Ok(Value::Bool(*n && *u)),
@@ -1321,7 +1360,7 @@ impl Eval {
         }
     }
 
-    pub fn or(&'static self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
+    pub fn or(&self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
         use RResult::*;
         match (&lhs, &rhs) {
             (Value::Bool(n), Value::Bool(u)) => Ok(Value::Bool(*n || *u)),
@@ -1336,7 +1375,7 @@ impl Eval {
         }
     }
 
-    pub fn index(&'static self, lhs: Value, index: Value, loc: SourceLocation) -> ResultType {
+    pub fn index(&self, lhs: Value, index: Value, loc: SourceLocation) -> ResultType {
         use RResult::*;
         match (&lhs, &index) {
             (Value::Array(array), Value::Number(n)) => {
@@ -1369,56 +1408,7 @@ impl Eval {
         }
     }
 
-    pub fn call(
-        &'static mut self,
-        lhs: Value,
-        args: Vec<Value>,
-        loc: SourceLocation,
-    ) -> ResultType {
-        use RResult::*;
-        match &lhs {
-            Value::Func(fnc) => {
-                let out =
-                    unwrap_result!(fnc(&args[..]).map_err(|err| Error::RuntimeError(loc, err)));
-                Ok(out)
-            }
-
-            Value::UserFunc { params, body } => {
-                if params.len() != args.len() {
-                    return ResultType::Err(Error::RuntimeError(
-                        loc,
-                        format!(
-                            "function requires {} arguments, you supplied {}",
-                            params.len(),
-                            args.len()
-                        ),
-                    ));
-                }
-                // store old state of the context and bind parameters names to the current context
-                // then reset the context to its old state after function call
-                let context = self.get_context_mut();
-                let previous = context.clone();
-                for (param, arg) in params.iter().zip(args) {
-                    context.var(param.clone(), arg, false);
-                }
-                let out = self.eval_expr(body);
-                self.set_context(previous);
-                out
-            }
-
-            _ => Err(Error::TypeError(
-                loc,
-                format!("{} isn't a callable object", lhs.get_type()),
-            )),
-        }
-    }
-
-    pub fn member_access(
-        &'static mut self,
-        lhs: Value,
-        rhs: String,
-        loc: SourceLocation,
-    ) -> ResultType {
+    /*pub fn member_access(&mut self, lhs: Value, rhs: String, loc: SourceLocation) -> ResultType {
         use crate::builtins;
         use RResult::*;
         match &lhs {
@@ -1427,16 +1417,10 @@ impl Eval {
                 match ctx.get_func(rhs.clone()) {
                     Some(f) => {
                         let func = |args: &[Value]| -> Result<Value, String> {
-                            let mut v = vec![value.clone()];
-                            v.extend(args.to_vec());
-                            match self.call(Value::Func(f.clone()), v, loc.clone()) {
-                                Ok(v) => Result::Ok(v),
-                                Return(v) => Result::Ok(v),
-                                Err(err) => Result::Err(err.to_string()),
-                            }
+                            let total = Vec::from([value]);
+                            total.extedn
                         };
-                        let rc_ = Rc::new(func);
-                        Ok(Value::Func(rc_))
+                        Value::Func(f.clone()).call(Vec::from([value.clone()]), loc.clone(), self)
                     }
                     None => match ctx.get_var(rhs.clone()) {
                         Some(v) => Ok(v.clone()),
@@ -1452,13 +1436,13 @@ impl Eval {
                 format!("invalid type for . {}", lhs.get_type()),
             )),
         }
-    }
+    }*/
 
     pub fn set_input(&mut self, input: Vec<Expression>) {
         self.expr = input;
     }
 
-    pub fn eval(&'static mut self) -> ResultType {
+    pub fn eval(&mut self) -> ResultType {
         use RResult::*;
         let mut iter = self.expr.clone().into_iter();
         let next = match iter.next() {

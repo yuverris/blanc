@@ -1,9 +1,9 @@
-use crate::eval::{Context, Value};
+use crate::eval::Context;
 
 use std::lazy::SyncLazy;
 
 /// habdles the member functions/constants for built-in types
-/// TODO: comolete this
+/// TODO: complete this
 pub(crate) static NUM_CONTEXT: SyncLazy<Context> = SyncLazy::new(|| {
     let mut ctx = Context::new();
     ctx.func1("to_string", |_self: i128| -> String { _self.to_string() });
@@ -15,7 +15,7 @@ pub(crate) static NUM_CONTEXT: SyncLazy<Context> = SyncLazy::new(|| {
             _self
         }
     });
-    ctx.func1("max", |_: i128| -> i128 { i128::MAX });
-    ctx.func1("min", |_: i128| -> i128 { i128::MIN });
+    ctx.var("max", i128::MAX, true);
+    ctx.var("min", i128::MIN, true);
     ctx
 });

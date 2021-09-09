@@ -57,11 +57,7 @@ impl<'a> Parser<'a> {
     }
 
     fn advance(&mut self) -> (SourceLocation, Token) {
-        if let Some(_) = self.tokens.peek() {
-            self.tokens.next().unwrap().clone()
-        } else {
-            self.tokens.clone().last().unwrap().clone()
-        }
+        self.tokens.next().unwrap().clone()
     }
 
     fn _check_current(&self, token: &Token) -> bool {
@@ -111,7 +107,6 @@ impl<'a> Parser<'a> {
                         loc.clone(),
                         "expected closing parenthese ')' after expression".into(),
                     )),
-                    _ => unreachable!(),
                 }
             }
             Token::RBrace => self.parse_block_stmt(),
@@ -180,19 +175,14 @@ impl<'a> Parser<'a> {
 
     pub fn expression(&mut self, precedence: u8) -> error::Result<Expression> {
         let mut lhs = self.primary()?;
-        // a dirty work around for member access '.' operator
-        let mut is_dot = false;
         while !self._check_current(&Token::Semicolon) {
             let (loc, token) = self.tokens.peek().unwrap();
             if let Token::Op(op) = token.clone() {
-                if &op == &Operator::Dot {
-                    is_dot = true;
-                }
                 if op.precedence() < precedence {
                     break;
                 }
-                self.advance();
                 if op.is_binary() {
+                    self.advance();
                     let rhs = self.expression(op.precedence())?;
 
                     lhs = Expression::Binary(loc.clone(), op.clone(), Box::new(lhs), Box::new(rhs));
@@ -360,7 +350,7 @@ impl<'a> Parser<'a> {
             };
         }
         let body = match self.advance() {
-            (loc, Token::RBrace) => self.parse_block_stmt()?,
+            (_, Token::RBrace) => self.parse_block_stmt()?,
             (loc, _) => {
                 return Err(Error::SyntaxError(
                     loc.clone(),
