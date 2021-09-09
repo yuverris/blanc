@@ -1,5 +1,5 @@
 use crate::{
-    error::{self, Error},
+    error::Error,
     lexer::Operator,
     parser::Expression,
     source_location::SourceLocation,
@@ -7,7 +7,7 @@ use crate::{
     utils::{FloatExt, RResult},
 };
 
-use std::{collections::HashMap, convert::TryFrom, fmt, rc::Rc, string::ToString};
+use std::{collections::HashMap, convert::TryFrom, fmt, lazy::SyncLazy, rc::Rc, string::ToString};
 /// Enum for handling objects
 ///
 /// # Example
@@ -43,46 +43,18 @@ pub enum Value {
     Void,
 }
 
-/// main trait for defining callable objects
-pub trait Callable {
-    fn call(&self, args: Vec<Value>, loc: SourceLocation, eval: &mut Eval) -> error::Result<Value>;
-}
+type ResultType = RResult<Value, Error, Value>;
 
-impl Callable for Value {
-    fn call(&self, args: Vec<Value>, loc: SourceLocation, eval: &mut Eval) -> error::Result<Value> {
-        match self {
-            Value::Func(fnc) => fnc(&args[..]).map_err(|err| Error::RuntimeError(loc, err)),
-
-            Value::UserFunc { params, body } => {
-                if params.len() != args.len() {
-                    return Err(Error::RuntimeError(
-                        loc,
-                        format!(
-                            "function requires {} arguments, you supplied {}",
-                            params.len(),
-                            args.len()
-                        ),
-                    ));
-                }
-                // store old state of the context and bind parameters names to the current context
-                // then reset the context to its old state after function call
-                let context = eval.get_context_mut();
-                let previous = context.clone();
-                for (param, arg) in params.iter().zip(args) {
-                    context.var(param.clone(), arg, false);
-                }
-                let out = eval.eval_expr(body);
-                eval.set_context(previous);
-                out
-            }
-
-            _ => Err(Error::TypeError(
-                loc,
-                format!("{} isn't a callable object", self.get_type()),
-            )),
+/// macro for converting std::result::Result to RResult
+macro_rules! unwrap_result {
+    ($expr:expr) => {
+        match $expr {
+            std::result::Result::Ok(v) => v,
+            std::result::Result::Err(err) => return ResultType::Err(err),
         }
-    }
+    };
 }
+
 impl FloatExt for f64 {
     fn approx_eq(self, other: Self) -> bool {
         (self - other).abs() < f64::EPSILON
@@ -172,38 +144,44 @@ impl fmt::Debug for Value {
 }
 
 impl From<f64> for Value {
-    fn from(value: f64) -> Value {
-        Value::Float(value)
+    fn from(value: f64) -> Self {
+        Self::Float(value)
     }
 }
 
 impl From<i128> for Value {
-    fn from(value: i128) -> Value {
-        Value::Number(value)
+    fn from(value: i128) -> Self {
+        Self::Number(value)
     }
 }
 
 impl From<String> for Value {
-    fn from(value: String) -> Value {
-        Value::String(value)
+    fn from(value: String) -> Self {
+        Self::String(value)
+    }
+}
+
+impl From<&str> for Value {
+    fn from(value: &str) -> Self {
+        Self::String(value.to_string())
     }
 }
 
 impl From<char> for Value {
-    fn from(value: char) -> Value {
-        Value::Char(value)
+    fn from(value: char) -> Self {
+        Self::Char(value)
     }
 }
 
 impl From<bool> for Value {
-    fn from(value: bool) -> Value {
-        Value::Bool(value)
+    fn from(value: bool) -> Self {
+        Self::Bool(value)
     }
 }
 
 impl From<()> for Value {
-    fn from(_: ()) -> Value {
-        Value::Void
+    fn from(_: ()) -> Self {
+        Self::Void
     }
 }
 
@@ -211,16 +189,16 @@ impl<T> From<Vec<T>> for Value
 where
     Value: From<T>,
 {
-    fn from(value: Vec<T>) -> Value {
-        Value::Array(value.into_iter().map(Value::from).collect())
+    fn from(value: Vec<T>) -> Self {
+        Self::Array(value.into_iter().map(Value::from).collect())
     }
 }
 
 impl<T: Into<Value>> From<Option<T>> for Value {
-    fn from(value: Option<T>) -> Value {
+    fn from(value: Option<T>) -> Self {
         match value {
             Some(t) => t.into(),
-            None => Value::Null,
+            None => Self::Null,
         }
     }
 }
@@ -277,7 +255,7 @@ impl ToString for Value {
     }
 }
 
-type FunctionType = Rc<dyn Fn(&[Value]) -> Result<Value, String>>;
+type FunctionType = Rc<dyn FnMut(&[Value]) -> Result<Value, String>>;
 
 #[derive(Clone)]
 pub struct VariableHandle {
@@ -421,6 +399,39 @@ impl Context {
         };
         self.functions.insert(name.to_string(), Rc::new(fnc));
     }
+    ///
+    /// Adds a new function without arguments
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// // any argument type/return type is allowed as long as it's convertible to eval::Value
+    /// fn function() -> &str {
+    ///     "hello"
+    /// }
+    /// fn main() {
+    ///      use blanc::eval::{Context, Value};
+    ///      let mut ctx = Context::new();
+    ///      ctx.func0("hello".to_string(), function);
+    /// }
+    /// ```
+    pub fn func0<S, F, U>(&mut self, name: S, func: F)
+    where
+        S: ToString,
+        U: Into<Value>,
+        F: Fn() -> U + 'static,
+    {
+        let fnc = move |args: &[Value]| -> Result<Value, String> {
+            if !args.is_empty() {
+                Err(format!("umatched arguments count function doesn't require any arguments, you supplied {} arguments",
+                            args.len()))
+            } else {
+                Value::try_from(func())
+                    .map_err(|_| "failed to convert function return type".to_string())
+            }
+        };
+        self.functions.insert(name.to_string(), Rc::new(fnc));
+    }
 
     /// Adds a new function that accepts a single argument
     ///
@@ -451,39 +462,6 @@ impl Context {
             } else {
                 let arg: T = T::try_from(args[0].clone())?;
                 Value::try_from(func(arg))
-                    .map_err(|_| "failed to convert function return type".to_string())
-            }
-        };
-        self.functions.insert(name.to_string(), Rc::new(fnc));
-    }
-
-    /// Adds a new function without arguments
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// // any argument type/return type is allowed as long as it's convertible to eval::Value
-    /// fn function() -> i128 {
-    ///      
-    /// }
-    /// fn main() {
-    ///      use blanc::eval::{Context, Value};
-    ///      let mut ctx = Context::new();
-    ///      ctx.func0("foo".to_string(), function);
-    /// }
-    /// ```
-    pub fn func0<S, F, U>(&mut self, name: S, func: F)
-    where
-        S: ToString,
-        U: Into<Value>,
-        F: Fn() -> U + 'static,
-    {
-        let fnc = move |args: &[Value]| -> Result<Value, String> {
-            if !args.is_empty() {
-                Err(format!("umatched arguments count function doesn't require any arguments, you supplied {} arguments",
-                            args.len()))
-            } else {
-                Value::try_from(func())
                     .map_err(|_| "failed to convert function return type".to_string())
             }
         };
@@ -651,24 +629,23 @@ impl Context {
     }
 }
 
+unsafe impl Sync for Context {}
+unsafe impl Send for Context {}
+
 /// struct for evaluating expressions
 pub struct Eval {
     /// list of expressions to evaluate
     expr: Vec<Expression>,
     /// context to lookup for variables/functions
     context: Context,
-    /// maximum precision that a number can hold
-    max_precision: f64,
 }
 
-use RResult::*;
 impl Eval {
     /// constructs a new Eval from the given vector of expressions along side with builtin context
     pub fn new(expr: Vec<Expression>) -> Self {
         Self {
             expr,
             context: Context::with_builtins(),
-            max_precision: 1e8,
         }
     }
 
@@ -677,46 +654,43 @@ impl Eval {
         Self {
             expr: Vec::new(),
             context: Context::with_builtins(),
-            max_precision: 1e8,
         }
     }
 
     /// constructs a new Eval from the given vector of expressions along side with custom context
     pub fn with_context(expr: Vec<Expression>, ctx: Context) -> Self {
-        Self {
-            expr,
-            context: ctx,
-            max_precision: 1e8,
-        }
+        Self { expr, context: ctx }
     }
 
     /// get a reference to eval's context
-    pub fn get_context(&self) -> &Context {
+    pub fn get_context(&'static self) -> &Context {
         &self.context
     }
 
     /// get a mutable reference to eval's context
-    pub fn get_context_mut(&mut self) -> &mut Context {
+    pub fn get_context_mut(&'static mut self) -> &mut Context {
         &mut self.context
     }
 
     /// set eval's context
-    pub fn set_context(&mut self, ctx: Context) {
+    pub fn set_context(&'static mut self, ctx: Context) {
         self.context = ctx;
     }
 
     /// main function for evaluation expressions
-    pub fn eval_expr(&mut self, expr: &Expression) -> RResult<Value, Error, Value> {
+    pub fn eval_expr(&'static mut self, expr: &Expression) -> ResultType {
+        use RResult::*;
         match expr {
             Expression::Float(_, x) => Ok(Value::Float(*x)),
             Expression::String(_, s) => Ok(Value::String(s.clone())),
             Expression::Char(_, c) => Ok(Value::Char(*c)),
             Expression::Array(_, exprs) => {
-                let inner = try_err!(exprs
-                    .iter()
-                    .map(|elm| -> RResult<Value, Error, Value> { self.eval_expr(elm) })
-                    .collect::<RResult<Vec<Value>, Error, Value>>());
-                Ok(Value::Array(inner))
+                let mut inner: Vec<Value> = Vec::new();
+                for expr in exprs {
+                    let temp = try_err!(self.eval_expr(expr));
+                    inner.push(temp);
+                }
+                ResultType::Ok(Value::Array(inner))
             }
             Expression::Number(_, x) => Ok(Value::Number(*x)),
             Expression::Bool(_, b) => Ok(Value::Bool(*b)),
@@ -733,13 +707,23 @@ impl Eval {
                     ))
                 }
             }
-            Expression::FuncCall(loc, box expr, args) => self.eval_expr(expr)?.call(
-                args.iter()
-                    .map(|arg| -> error::Result<Value> { self.eval_expr(arg) })
-                    .collect::<error::Result<Vec<Value>>>()?,
-                loc.clone(),
-                self,
-            ),
+            Expression::FuncCall(loc, box expr, args) => {
+                let target = try_err!(self.eval_expr(expr));
+                let mut _args: Vec<Value> = Vec::new();
+                for arg in args {
+                    let temp = try_err!(self.eval_expr(arg));
+                    _args.push(temp);
+                }
+                self.call(target, _args, loc.clone())
+            }
+            Expression::FuncDef(loc, name, args, box body) => {
+                let function = Value::UserFunc {
+                    params: args.clone(),
+                    body: body.clone(),
+                };
+                self.context.var(name, function, false);
+                Ok(Value::Void)
+            }
             Expression::Unary(loc, Operator::Negative, box expr) => {
                 let temp = try_err!(self.eval_expr(expr));
                 self.neg(temp, loc.clone())
@@ -754,7 +738,7 @@ impl Eval {
 
             Expression::Binary(loc, Operator::Plus, box lhs, box rhs) => {
                 let temp_lhs = try_err!(self.eval_expr(lhs));
-                let temp_rhs = self.eval_expr(rhs)?;
+                let temp_rhs = try_err!(self.eval_expr(rhs));
                 self.add(temp_lhs, temp_rhs, loc.clone())
             }
 
@@ -771,63 +755,90 @@ impl Eval {
             }
 
             Expression::Binary(loc, Operator::Slash, box lhs, box rhs) => {
-                let temp_lhs = self.eval_expr(lhs)?;
-                let temp_rhs = self.eval_expr(rhs)?;
+                let temp_lhs = try_err!(self.eval_expr(lhs));
+                let temp_rhs = try_err!(self.eval_expr(rhs));
                 self.div(temp_lhs, temp_rhs, loc.clone())
             }
 
             Expression::Binary(loc, Operator::BitXor, box lhs, box rhs) => {
-                let temp_lhs = self.eval_expr(lhs)?;
-                let temp_rhs = self.eval_expr(rhs)?;
+                let temp_lhs = try_err!(self.eval_expr(lhs));
+                let temp_rhs = try_err!(self.eval_expr(rhs));
                 self.bit_xor(temp_lhs, temp_rhs, loc.clone())
             }
 
+            Expression::Binary(loc, Operator::BitOr, box lhs, box rhs) => {
+                let temp_lhs = try_err!(self.eval_expr(lhs));
+                let temp_rhs = try_err!(self.eval_expr(rhs));
+                self.bit_or(temp_lhs, temp_rhs, loc.clone())
+            }
+
+            Expression::Binary(loc, Operator::BitAnd, box lhs, box rhs) => {
+                let temp_lhs = try_err!(self.eval_expr(lhs));
+                let temp_rhs = try_err!(self.eval_expr(rhs));
+                self.bit_and(temp_lhs, temp_rhs, loc.clone())
+            }
+
             Expression::Binary(loc, Operator::And, box lhs, box rhs) => {
-                let temp_lhs = self.eval_expr(lhs)?;
-                let temp_rhs = self.eval_expr(rhs)?;
+                let temp_lhs = try_err!(self.eval_expr(lhs));
+                let temp_rhs = try_err!(self.eval_expr(rhs));
                 self.and(temp_lhs, temp_rhs, loc.clone())
             }
 
             Expression::Binary(loc, Operator::Or, box lhs, box rhs) => {
-                let temp_lhs = self.eval_expr(lhs)?;
-                let temp_rhs = self.eval_expr(rhs)?;
+                let temp_lhs = try_err!(self.eval_expr(lhs));
+                let temp_rhs = try_err!(self.eval_expr(rhs));
                 self.or(temp_lhs, temp_rhs, loc.clone())
             }
 
             Expression::Binary(loc, Operator::Equal, box lhs, box rhs) => {
-                let temp_lhs = self.eval_expr(lhs)?;
-                let temp_rhs = self.eval_expr(rhs)?;
+                let temp_lhs = try_err!(self.eval_expr(lhs));
+                let temp_rhs = try_err!(self.eval_expr(rhs));
                 self.equals(temp_lhs, temp_rhs, loc.clone())
             }
 
             Expression::Binary(loc, Operator::NotEqual, box lhs, box rhs) => {
-                let temp_lhs = self.eval_expr(lhs)?;
-                let temp_rhs = self.eval_expr(rhs)?;
+                let temp_lhs = try_err!(self.eval_expr(lhs));
+                let temp_rhs = try_err!(self.eval_expr(rhs));
                 self.not_equals(temp_lhs, temp_rhs, loc.clone())
             }
 
             Expression::Binary(loc, Operator::Greater, box lhs, box rhs) => {
-                let temp_lhs = self.eval_expr(lhs)?;
-                let temp_rhs = self.eval_expr(rhs)?;
+                let temp_lhs = try_err!(self.eval_expr(lhs));
+                let temp_rhs = try_err!(self.eval_expr(rhs));
                 self.greater(temp_lhs, temp_rhs, loc.clone())
             }
 
             Expression::Binary(loc, Operator::GreaterOrEqual, box lhs, box rhs) => {
-                let temp_lhs = self.eval_expr(lhs)?;
-                let temp_rhs = self.eval_expr(rhs)?;
+                let temp_lhs = try_err!(self.eval_expr(lhs));
+                let temp_rhs = try_err!(self.eval_expr(rhs));
                 self.greater_or_equal(temp_lhs, temp_rhs, loc.clone())
             }
 
             Expression::Binary(loc, Operator::Less, box lhs, box rhs) => {
-                let temp_lhs = self.eval_expr(lhs)?;
-                let temp_rhs = self.eval_expr(rhs)?;
+                let temp_lhs = try_err!(self.eval_expr(lhs));
+                let temp_rhs = try_err!(self.eval_expr(rhs));
                 self.less(temp_lhs, temp_rhs, loc.clone())
             }
 
             Expression::Binary(loc, Operator::LessOrEqual, box lhs, box rhs) => {
-                let temp_lhs = self.eval_expr(lhs)?;
-                let temp_rhs = self.eval_expr(rhs)?;
+                let temp_lhs = try_err!(self.eval_expr(lhs));
+                let temp_rhs = try_err!(self.eval_expr(rhs));
                 self.less_or_equal(temp_lhs, temp_rhs, loc.clone())
+            }
+
+            // member access operator: target.value
+            Expression::Binary(loc, Operator::Dot, box lhs, box rhs) => {
+                let temp_lhs = try_err!(self.eval_expr(lhs));
+                let temp_rhs = match rhs {
+                    Expression::Ident(_, name) => name.clone(),
+                    _ => {
+                        return Err(Error::SyntaxError(
+                            loc.clone(),
+                            "invalid type for '.' operator".to_string(),
+                        ))
+                    }
+                };
+                self.member_access(temp_lhs, temp_rhs, loc.clone())
             }
 
             Expression::Binary(loc, Operator::Assign, box lhs, box rhs) => {
@@ -840,7 +851,7 @@ impl Eval {
                         ))
                     }
                 };
-                let expr = self.eval_expr(rhs)?;
+                let expr = try_err!(self.eval_expr(rhs));
                 let var = match self.context.get_mut_var_handle(name.clone()) {
                     Some(handle) => handle,
                     None => {
@@ -862,14 +873,14 @@ impl Eval {
             }
 
             Expression::Subscript(loc, box lhs, box inner) => {
-                let lhs = self.eval_expr(lhs)?;
-                let inner = self.eval_expr(inner)?;
+                let lhs = try_err!(self.eval_expr(lhs));
+                let inner = try_err!(self.eval_expr(inner));
                 self.index(lhs, inner, loc.clone())
             }
 
             Expression::Variable(_, name, value, immutable) => {
                 let value = match value {
-                    Some(expr) => self.eval_expr(expr)?,
+                    Some(expr) => try_err!(self.eval_expr(expr)),
                     None => Value::Null,
                 };
                 self.context.var(name, value, *immutable);
@@ -878,29 +889,23 @@ impl Eval {
 
             Expression::Block(_, stmts) => {
                 let previous = self.context.clone();
-                let mut iter = stmts.iter();
-                let next: Expression = match iter.next() {
-                    Some(Expression::Return(_, box expr)) => return self.eval_expr(expr),
-                    Some(expr) => expr.clone(),
-                    None => return Ok(Value::Null),
-                };
-                let mut out: Value = self.eval_expr(&next)?;
-                for expr in iter {
+                for expr in stmts {
                     match expr {
                         Expression::Return(_, box expr) => {
-                            return self.eval_expr(expr);
+                            let item = try_return!(self.eval_expr(expr));
+                            self.context = previous;
+                            return Return(item);
                         }
-                        _ => {
-                            out = self.eval_expr(expr)?;
-                        }
+                        _ => try_return!(self.eval_expr(expr)),
                     };
                 }
                 self.context = previous;
-                Ok(out)
+                Ok(Value::Null)
             }
 
             Expression::IfStmt(loc, box condition, box body, else_clause) => {
-                match self.eval_expr(condition)? {
+                let cond = try_err!(self.eval_expr(condition));
+                match cond {
                     Value::Bool(true) => self.eval_expr(body),
                     Value::Bool(false) => match else_clause {
                         Some(box body) => self.eval_expr(body),
@@ -913,22 +918,89 @@ impl Eval {
                 }
             }
 
+            Expression::WhileStmt(loc, condition, box body) => {
+                let body_exprs = match body {
+                    Expression::Block(_, stmts) => stmts,
+                    _ => {
+                        return Err(Error::SyntaxError(
+                            loc.clone(),
+                            "expected block statement after `while`".to_string(),
+                        ))
+                    }
+                };
+                match condition {
+                    Some(box expr) => {
+                        'l: loop {
+                            let cond = try_err!(self.eval_expr(expr));
+                            let cond = match cond {
+                                Value::Bool(v) => v,
+                                _ => {
+                                    return Err(Error::RuntimeError(
+                                        loc.clone(),
+                                        format!(
+                                            "while statement condtion must return a bool found {}",
+                                            cond.get_type()
+                                        ),
+                                    ))
+                                }
+                            };
+                            if !cond {
+                                break;
+                            }
+                            for expr in body_exprs {
+                                match expr {
+                                    Expression::Return(_, box expr) => {
+                                        let item = try_return!(self.eval_expr(expr));
+                                        return Return(item);
+                                    }
+                                    Expression::Break(_) => {
+                                        break 'l;
+                                    }
+                                    Expression::Continue(_) => continue,
+                                    _ => try_return!(self.eval_expr(expr)),
+                                };
+                            }
+                        }
+                        return Ok(Value::Void);
+                    }
+                    None => loop {
+                        try_return!(self.eval_expr(body));
+                    },
+                };
+            }
+
+            Expression::Break(loc) => Err(Error::SyntaxError(
+                loc.clone(),
+                "use of `break` statement outside loop".to_string(),
+            )),
+
+            Expression::Continue(loc) => Err(Error::SyntaxError(
+                loc.clone(),
+                "use of `continue` statement outside loop".to_string(),
+            )),
+
+            Expression::Return(loc, _) => Err(Error::SyntaxError(
+                loc.clone(),
+                "use of `return` statement outside block statement".to_string(),
+            )),
+
             _ => Err(Error::Error("invalid expression".into())),
         }
     }
 
-    pub fn add(&self, lhs: Value, rhs: Value, loc: SourceLocation) -> error::Result<Value> {
+    pub fn add(&'static self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
+        use RResult::*;
         match (&lhs, &rhs) {
             (Value::Number(n), Value::Number(m)) => {
-                let res = n.checked_add(*m).ok_or_else(|| {
+                let res = unwrap_result!(n.checked_add(*m).ok_or_else(|| {
                     Error::RuntimeError(loc.clone(), "operation results in an overflow".to_string())
-                })?;
+                }));
                 Ok(Value::from(res))
             }
             (Value::Float(n), Value::Float(m)) => {
-                let res = n.checked_add(*m).ok_or_else(|| {
+                let res = unwrap_result!(n.checked_add(*m).ok_or_else(|| {
                     Error::RuntimeError(loc.clone(), "operation results in an overflow".to_string())
-                })?;
+                }));
                 Ok(Value::from(res))
             }
             _ => Err(Error::TypeError(
@@ -942,24 +1014,25 @@ impl Eval {
         }
     }
 
-    pub fn sub(&self, lhs: Value, rhs: Value, loc: SourceLocation) -> error::Result<Value> {
+    pub fn sub(&'static self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
+        use RResult::*;
         match (&lhs, &rhs) {
             (Value::Number(n), Value::Number(m)) => {
-                let res = n.checked_sub(*m).ok_or_else(|| {
+                let res = unwrap_result!(n.checked_sub(*m).ok_or_else(|| {
                     Error::RuntimeError(
                         loc.clone(),
                         "operation results in an underflow".to_string(),
                     )
-                })?;
+                }));
                 Ok(Value::from(res))
             }
             (Value::Float(n), Value::Float(m)) => {
-                let res = n.checked_sub(*m).ok_or_else(|| {
+                let res = unwrap_result!(n.checked_sub(*m).ok_or_else(|| {
                     Error::RuntimeError(
                         loc.clone(),
                         "operation results in an underflow".to_string(),
                     )
-                })?;
+                }));
                 Ok(Value::from(res))
             }
             _ => Err(Error::TypeError(
@@ -973,24 +1046,25 @@ impl Eval {
         }
     }
 
-    pub fn div(&self, lhs: Value, rhs: Value, loc: SourceLocation) -> error::Result<Value> {
+    pub fn div(&'static self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
+        use RResult::*;
         match (&lhs, &rhs) {
             (Value::Number(n), Value::Number(m)) => {
-                let res = n.checked_div(*m).ok_or_else(|| {
+                let res = unwrap_result!(n.checked_div(*m).ok_or_else(|| {
                     Error::RuntimeError(
                         loc.clone(),
                         "operation results in an underflow".to_string(),
                     )
-                })?;
+                }));
                 Ok(Value::from(res))
             }
             (Value::Float(n), Value::Float(m)) => {
-                let res = n.checked_div(*m).ok_or_else(|| {
+                let res = unwrap_result!(n.checked_div(*m).ok_or_else(|| {
                     Error::RuntimeError(
                         loc.clone(),
                         "operation results in an underflow".to_string(),
                     )
-                })?;
+                }));
                 Ok(Value::from(res))
             }
             _ => Err(Error::TypeError(
@@ -1004,21 +1078,21 @@ impl Eval {
         }
     }
 
-    pub fn mul(&self, lhs: Value, rhs: Value, loc: SourceLocation) -> error::Result<Value> {
+    pub fn mul(&'static self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
+        use RResult::*;
         match (&lhs, &rhs) {
             (Value::Number(n), Value::Number(m)) => {
-                let res = n.checked_mul(*m).ok_or_else(|| {
+                let res = unwrap_result!(n.checked_mul(*m).ok_or_else(|| {
                     Error::RuntimeError(loc.clone(), "operation results in an overflow".to_string())
-                })?;
+                }));
                 Ok(Value::from(res))
             }
-            (Value::Float(n), Value::Float(m)) => Ok(Value::Float(
-                (n.checked_mul(*m).ok_or_else(|| {
+            (Value::Float(n), Value::Float(m)) => {
+                let res = unwrap_result!(n.checked_mul(*m).ok_or_else(|| {
                     Error::RuntimeError(loc.clone(), "operation results in an overflow".to_string())
-                })? * self.max_precision)
-                    .trunc()
-                    / self.max_precision,
-            )),
+                }));
+                Ok(Value::from(res))
+            }
             _ => Err(Error::TypeError(
                 loc,
                 format!(
@@ -1030,7 +1104,8 @@ impl Eval {
         }
     }
 
-    pub fn bit_xor(&self, lhs: Value, rhs: Value, loc: SourceLocation) -> error::Result<Value> {
+    pub fn bit_xor(&'static self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
+        use RResult::*;
         match (&lhs, &rhs) {
             (Value::Number(n), Value::Number(m)) => Ok(Value::from(*n ^ *m)),
             _ => Err(Error::TypeError(
@@ -1044,7 +1119,53 @@ impl Eval {
         }
     }
 
-    pub fn neg(&self, lhs: Value, loc: SourceLocation) -> error::Result<Value> {
+    pub fn bit_or(&'static self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
+        use RResult::*;
+        match (&lhs, &rhs) {
+            (Value::Number(n), Value::Number(m)) => Ok(Value::from(*n | *m)),
+            _ => Err(Error::TypeError(
+                loc,
+                format!(
+                    "invalid operands for binary operation '|': {} and {}",
+                    lhs.get_type(),
+                    rhs.get_type()
+                ),
+            )),
+        }
+    }
+
+    pub fn bit_and(&'static self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
+        use RResult::*;
+        match (&lhs, &rhs) {
+            (Value::Number(n), Value::Number(m)) => Ok(Value::from(*n & *m)),
+            _ => Err(Error::TypeError(
+                loc,
+                format!(
+                    "invalid operands for binary operation '|': {} and {}",
+                    lhs.get_type(),
+                    rhs.get_type()
+                ),
+            )),
+        }
+    }
+
+    pub fn bit_not(&'static self, rhs: Value, loc: SourceLocation) -> ResultType {
+        use RResult::*;
+        match &rhs {
+            Value::Number(n) => Ok(Value::from(!*n)),
+            Value::Bool(b) => Ok(Value::from(!*b)),
+            _ => Err(Error::TypeError(
+                loc,
+                format!(
+                    "invalid operands for unary operation '~': {}",
+                    rhs.get_type(),
+                ),
+            )),
+        }
+    }
+
+    pub fn neg(&'static self, lhs: Value, loc: SourceLocation) -> ResultType {
+        use RResult::*;
         match &lhs {
             Value::Float(n) => Ok(Value::from(-n)),
             Value::Number(n) => Ok(Value::from(-n)),
@@ -1058,7 +1179,8 @@ impl Eval {
         }
     }
 
-    pub fn not(&self, lhs: Value, loc: SourceLocation) -> error::Result<Value> {
+    pub fn not(&'static self, lhs: Value, loc: SourceLocation) -> ResultType {
+        use RResult::*;
         match &lhs {
             Value::Bool(b) => Ok(Value::Bool(!b)),
             _ => Err(Error::TypeError(
@@ -1071,7 +1193,8 @@ impl Eval {
         }
     }
 
-    pub fn equals(&self, lhs: Value, rhs: Value, loc: SourceLocation) -> error::Result<Value> {
+    pub fn equals(&'static self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
+        use RResult::*;
         match (&lhs, &rhs) {
             (Value::Number(n), Value::Number(u)) => Ok(Value::Bool(n == u)),
             (Value::Float(n), Value::Float(u)) => Ok(Value::Bool(n.approx_eq(*u))),
@@ -1088,7 +1211,8 @@ impl Eval {
         }
     }
 
-    pub fn not_equals(&self, lhs: Value, rhs: Value, loc: SourceLocation) -> error::Result<Value> {
+    pub fn not_equals(&'static self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
+        use RResult::*;
         match (&lhs, &rhs) {
             (Value::Number(n), Value::Number(u)) => Ok(Value::Bool(n != u)),
             (Value::Float(n), Value::Float(u)) => Ok(Value::Bool(n.approx_not_eq(*u))),
@@ -1105,7 +1229,8 @@ impl Eval {
         }
     }
 
-    pub fn greater(&self, lhs: Value, rhs: Value, loc: SourceLocation) -> error::Result<Value> {
+    pub fn greater(&'static self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
+        use RResult::*;
         match (&lhs, &rhs) {
             (Value::Float(n), Value::Float(u)) => Ok(Value::Bool(n > u)),
             (Value::Number(n), Value::Number(u)) => Ok(Value::Bool(n > u)),
@@ -1123,11 +1248,12 @@ impl Eval {
     }
 
     pub fn greater_or_equal(
-        &self,
+        &'static self,
         lhs: Value,
         rhs: Value,
         loc: SourceLocation,
-    ) -> error::Result<Value> {
+    ) -> ResultType {
+        use RResult::*;
         match (&lhs, &rhs) {
             (Value::Float(n), Value::Float(u)) => Ok(Value::Bool(n >= u)),
             (Value::Number(n), Value::Number(u)) => Ok(Value::Bool(n >= u)),
@@ -1144,7 +1270,8 @@ impl Eval {
         }
     }
 
-    pub fn less(&self, lhs: Value, rhs: Value, loc: SourceLocation) -> error::Result<Value> {
+    pub fn less(&'static self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
+        use RResult::*;
         match (&lhs, &rhs) {
             (Value::Float(n), Value::Float(u)) => Ok(Value::Bool(n < u)),
             (Value::Number(n), Value::Number(u)) => Ok(Value::Bool(n < u)),
@@ -1161,12 +1288,8 @@ impl Eval {
         }
     }
 
-    pub fn less_or_equal(
-        &self,
-        lhs: Value,
-        rhs: Value,
-        loc: SourceLocation,
-    ) -> error::Result<Value> {
+    pub fn less_or_equal(&'static self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
+        use RResult::*;
         match (&lhs, &rhs) {
             (Value::Float(n), Value::Float(u)) => Ok(Value::Bool(n <= u)),
             (Value::Number(n), Value::Number(u)) => Ok(Value::Bool(n <= u)),
@@ -1183,7 +1306,8 @@ impl Eval {
         }
     }
 
-    pub fn and(&self, lhs: Value, rhs: Value, loc: SourceLocation) -> error::Result<Value> {
+    pub fn and(&'static self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
+        use RResult::*;
         match (&lhs, &rhs) {
             (Value::Bool(n), Value::Bool(u)) => Ok(Value::Bool(*n && *u)),
             _ => Err(Error::TypeError(
@@ -1197,7 +1321,8 @@ impl Eval {
         }
     }
 
-    pub fn or(&self, lhs: Value, rhs: Value, loc: SourceLocation) -> error::Result<Value> {
+    pub fn or(&'static self, lhs: Value, rhs: Value, loc: SourceLocation) -> ResultType {
+        use RResult::*;
         match (&lhs, &rhs) {
             (Value::Bool(n), Value::Bool(u)) => Ok(Value::Bool(*n || *u)),
             _ => Err(Error::TypeError(
@@ -1211,7 +1336,8 @@ impl Eval {
         }
     }
 
-    pub fn index(&self, lhs: Value, index: Value, loc: SourceLocation) -> error::Result<Value> {
+    pub fn index(&'static self, lhs: Value, index: Value, loc: SourceLocation) -> ResultType {
+        use RResult::*;
         match (&lhs, &index) {
             (Value::Array(array), Value::Number(n)) => {
                 if *n >= (array.len() as i128) || n.abs() > (array.len() as i128) {
@@ -1225,9 +1351,12 @@ impl Eval {
                 } else {
                     *n
                 };
-                Ok(array[usize::try_from(n)
-                    .map_err(|_| Error::TypeError(loc.clone(), "value overflowed".to_string()))?]
-                .clone())
+                let index = usize::try_from(n)
+                    .map_err(|_| Error::TypeError(loc.clone(), "value overflowed".to_string()));
+                match index {
+                    std::result::Result::Ok(v) => Ok(array[v].clone()),
+                    std::result::Result::Err(err) => Err(err),
+                }
             }
             _ => Err(Error::TypeError(
                 loc,
@@ -1240,19 +1369,105 @@ impl Eval {
         }
     }
 
+    pub fn call(
+        &'static mut self,
+        lhs: Value,
+        args: Vec<Value>,
+        loc: SourceLocation,
+    ) -> ResultType {
+        use RResult::*;
+        match &lhs {
+            Value::Func(fnc) => {
+                let out =
+                    unwrap_result!(fnc(&args[..]).map_err(|err| Error::RuntimeError(loc, err)));
+                Ok(out)
+            }
+
+            Value::UserFunc { params, body } => {
+                if params.len() != args.len() {
+                    return ResultType::Err(Error::RuntimeError(
+                        loc,
+                        format!(
+                            "function requires {} arguments, you supplied {}",
+                            params.len(),
+                            args.len()
+                        ),
+                    ));
+                }
+                // store old state of the context and bind parameters names to the current context
+                // then reset the context to its old state after function call
+                let context = self.get_context_mut();
+                let previous = context.clone();
+                for (param, arg) in params.iter().zip(args) {
+                    context.var(param.clone(), arg, false);
+                }
+                let out = self.eval_expr(body);
+                self.set_context(previous);
+                out
+            }
+
+            _ => Err(Error::TypeError(
+                loc,
+                format!("{} isn't a callable object", lhs.get_type()),
+            )),
+        }
+    }
+
+    pub fn member_access(
+        &'static mut self,
+        lhs: Value,
+        rhs: String,
+        loc: SourceLocation,
+    ) -> ResultType {
+        use crate::builtins;
+        use RResult::*;
+        match &lhs {
+            value @ Value::Number(_) => {
+                let ctx = SyncLazy::force(&builtins::NUM_CONTEXT);
+                match ctx.get_func(rhs.clone()) {
+                    Some(f) => {
+                        let func = |args: &[Value]| -> Result<Value, String> {
+                            let mut v = vec![value.clone()];
+                            v.extend(args.to_vec());
+                            match self.call(Value::Func(f.clone()), v, loc.clone()) {
+                                Ok(v) => Result::Ok(v),
+                                Return(v) => Result::Ok(v),
+                                Err(err) => Result::Err(err.to_string()),
+                            }
+                        };
+                        let rc_ = Rc::new(func);
+                        Ok(Value::Func(rc_))
+                    }
+                    None => match ctx.get_var(rhs.clone()) {
+                        Some(v) => Ok(v.clone()),
+                        None => Err(Error::RuntimeError(
+                            loc.clone(),
+                            format!("`number` has no member functions/constant named {}", &rhs),
+                        )),
+                    },
+                }
+            }
+            _ => Err(Error::RuntimeError(
+                loc.clone(),
+                format!("invalid type for . {}", lhs.get_type()),
+            )),
+        }
+    }
+
     pub fn set_input(&mut self, input: Vec<Expression>) {
         self.expr = input;
     }
 
-    pub fn eval(&mut self) -> error::Result<Value> {
+    pub fn eval(&'static mut self) -> ResultType {
+        use RResult::*;
         let mut iter = self.expr.clone().into_iter();
         let next = match iter.next() {
             Some(x) => x,
             None => return Ok(Value::Null),
         };
-        let mut out: Value = self.eval_expr(&next)?;
+        let mut out: Value = try_err!(self.eval_expr(&next));
         for expr in iter {
-            out = self.eval_expr(&expr)?;
+            out = try_err!(self.eval_expr(&expr));
         }
         Ok(out)
     }

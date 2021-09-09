@@ -1,7 +1,15 @@
-#![feature(box_syntax, box_patterns, iter_intersperse)]
+#![feature(
+    box_syntax,
+    box_patterns,
+    iter_intersperse,
+    once_cell,
+    label_break_value
+)]
 
 //! Blanc math interpreter written in Rust with an easy to use API
 
+/// module for defining built-in member constants/functions for built-in types
+pub(crate) mod builtins;
 /// module related to error handeling
 pub mod error;
 /// module related to expressiom evalutation and handle most of the logic
@@ -33,15 +41,30 @@ pub fn evaluate(
     input: String,
     file: Option<String>,
     context: Option<crate::eval::Context>,
-) -> Result<String, String> {
-    use crate::{eval::Eval, lexer::Lexer, parser::Parser};
-    let mut lexer = Lexer::new(input, file);
-    let tokens = lexer.lex().map_err(|err| err.to_string())?;
+) -> crate::utils::RResult<String, String, ()> {
+    use crate::{
+        error::{format_err, Error},
+        eval::Eval,
+        lexer::Lexer,
+        parser::Parser,
+        utils::RResult::*,
+    };
+    let mut lexer = Lexer::new(input.clone(), file);
+    let tokens = lexer.lex().map_err(|err| err.to_string());
+    let tokens = match tokens {
+        Result::Ok(tok) => tok,
+        Result::Err(err) => return Err(err),
+    };
     let mut iter = tokens.iter().peekable();
-    let mut parser = Parser::new(&mut iter);
+    let mut parser = Parser::new(iter);
     let parsed = match parser.parse() {
-        Ok(out) => out,
-        Err(err) => return Err(err.to_string()),
+        Result::Ok(out) => out,
+        Result::Err(err) => match err {
+            Error::SyntaxError(ref loc, ..) => {
+                return Err(format_err(err.clone(), input, loc.clone()))
+            }
+            _ => return Err(err.to_string()),
+        },
     };
     let mut eval = match context {
         Some(ctx) => Eval::with_context(parsed, ctx),
@@ -49,104 +72,15 @@ pub fn evaluate(
     };
     match eval.eval() {
         Ok(result) => Ok(result.to_string()),
-        Err(err) => Err(err.to_string()),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        error::Error,
-        eval::{Eval, Value},
-        lexer::Lexer,
-        parser::Parser,
-    };
-
-    fn eval(input: String) -> Result<Value, Error> {
-        let mut lexer = Lexer::new(input, None);
-        let tokens = lexer.lex().unwrap();
-        let mut iter = tokens.iter().peekable();
-        let mut parser = Parser::new(&mut iter);
-        let parsed = parser.parse()?;
-        let mut eval = Eval::new(parsed);
-        eval.eval()
-    }
-
-    #[test]
-    fn basic_arithmetic() -> Result<(), Error> {
-        assert_eq!(eval("5 * 2 + 2;".to_string())?, Value::Number(12));
-        assert_eq!(eval("5 * (2 + 2);".to_string())?, Value::Number(20));
-        assert_eq!(eval("-2 / 2 + 1 * 4;".to_string())?, Value::Number(3));
-        assert_eq!(eval("1e-3 * 1e5;".to_string())?, Value::Float(100f64));
-        assert_eq!(eval("3.04 - 2.90;".to_string())?, Value::Float(3.04 - 2.90));
-        assert_eq!(eval("1.0 + 2.0;".to_string())?, Value::Float(3f64));
-        Ok(())
-    }
-
-    #[test]
-    fn comparison_logical_operators() -> Result<(), Error> {
-        assert_eq!(eval("5 == 5;".to_string())?, Value::Bool(true));
-        assert_eq!(eval("5 != 5;".to_string())?, Value::Bool(false));
-        assert_eq!(eval("5 < 5;".to_string())?, Value::Bool(false));
-        assert_eq!(eval("5 <= 5;".to_string())?, Value::Bool(true));
-        assert_eq!(eval("5 > 5;".to_string())?, Value::Bool(false));
-        assert_eq!(eval("5 >= 5;".to_string())?, Value::Bool(true));
-        assert_eq!(eval("true && true;".to_string())?, Value::Bool(true));
-        assert_eq!(eval("true && false;".to_string())?, Value::Bool(false));
-        assert_eq!(eval("false && false;".to_string())?, Value::Bool(false));
-        assert_eq!(eval("true || true;".to_string())?, Value::Bool(true));
-        assert_eq!(eval("false || true;".to_string())?, Value::Bool(true));
-        assert_eq!(eval("false || false;".to_string())?, Value::Bool(false));
-
-        Ok(())
-    }
-
-    #[test]
-    fn syntax() -> Result<(), Error> {
-        assert_eq!(eval("------1 + +--2;".to_string())?, Value::Number(3));
-        assert_eq!(
-            eval("(-(-(-(-(-(-(-(-(-(-(-(-(1)))))))))))));".to_string())?,
-            Value::Number(1)
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn variables() -> Result<(), Error> {
-        assert_eq!(eval("let x = 5; x * 2;".to_string())?, Value::Number(10));
-        assert_eq!(
-            eval("let x = 5; let y = x; let x = 3; y+x;".to_string())?,
-            Value::Number(8)
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn rust_integration() -> Result<(), String> {
-        let mut ctx = crate::eval::Context::new();
-        ctx.func2("add", |x: i128, y: i128| x + y);
-        ctx.var("x", 1, true);
-        ctx.var("y", 2, true);
-        assert_eq!(
-            crate::evaluate("add(x, y);".to_string(), None, Some(ctx))?,
-            "3"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn if_stmts() -> Result<(), String> {
-        let input = r#"fnc fact(x) {
-        if x <= 1 {
-            return x;
-        } else {"
-            return x*fact(x-1);
-        }
-}"#;
-        assert_eq!(
-            crate::evaluate(format!("{}; fact(5);", input), None, None)?,
-            "120"
-        );
-        Ok(())
+        Err(err) => match err {
+            Error::TypeError(ref loc, ..) => {
+                return Err(format_err(err.clone(), input, loc.clone()))
+            }
+            Error::RuntimeError(ref loc, ..) => {
+                return Err(format_err(err.clone(), input, loc.clone()))
+            }
+            _ => return Err(err.to_string()),
+        },
+        Return(_) => unreachable!(),
     }
 }

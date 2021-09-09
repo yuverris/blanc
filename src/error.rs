@@ -1,5 +1,5 @@
 use crate::source_location::SourceLocation;
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Error {
     TypeError(SourceLocation, String),
     RuntimeError(SourceLocation, String),
@@ -46,6 +46,16 @@ impl std::fmt::Display for Error {
             Error::Error(err) => write!(fmt, "error: {}", err),
         }
     }
+}
+
+pub fn format_err(err: Error, input: String, loc: SourceLocation) -> String {
+    let upper_line = '^';
+    let low_line = "-";
+    let lines: Vec<&str> = input.lines().collect();
+    let filled = format!("{}{}", low_line.repeat(loc.column), upper_line);
+    let formatted_input = format!("{}\n{}", lines[loc.line - 1], filled);
+
+    format!("{}\n\n{}", err, formatted_input)
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

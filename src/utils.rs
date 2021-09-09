@@ -129,7 +129,7 @@ macro_rules! try_return {
         match $expr {
             RResult::Ok(v) => v,
             err @ RResult::Err(_) => return err,
-            ret @ RResult::Return(_) => return err,
+            ret @ RResult::Return(_) => return ret,
         }
     };
 }

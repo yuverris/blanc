@@ -5,6 +5,7 @@ edition = "2018"
 
 [dependencies]
 rustyline = "9.0.0"
+clap = "2.33.3"
 
 [lib]
 name = "blanc"
@@ -12,6 +13,6 @@ path = "src/lib.rs"
 doctest = false
 
 [[bin]]
-name = "repl"
-path = "repl/main.rs"
+name = "blanc"
+path = "cli/main.rs"
 test = false

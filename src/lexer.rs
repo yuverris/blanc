@@ -26,14 +26,12 @@ pub enum Token {
     Else,
     RBrace,
     LBrace,
-    RBracket,
     LBracket,
     Null,
     Comma,
     LParen,
-    RParen,
-    Dot,
     Semicolon,
+    End,
     Op(Operator),
 }
 
@@ -42,12 +40,19 @@ pub enum Operator {
     Negative,
     Positive,
     Plus,
+    PlusAssign,
     Minus,
+    MinusAssign,
     Star,
+    StarAssign,
     Slash,
+    SlashAssign,
     BitOr,
+    BitOrAssign,
     BitXor,
+    BitXorAssign,
     BitAnd,
+    BitAndAssign,
     BitNot,
     Equal,
     Greater,
@@ -58,16 +63,34 @@ pub enum Operator {
     And,
     Or,
     Remainder,
+    RemainderAssign,
     LShift,
+    LShiftAssign,
     RShift,
+    RShiftAssign,
     Not,
     Assign,
+    Dot,
+    RParen,
+    RBracket,
 }
 
 impl Operator {
     pub fn precedence(&self) -> u8 {
         match self {
-            Operator::Assign => 10,
+            Operator::Dot => 0,
+
+            Operator::Assign
+            | Operator::PlusAssign
+            | Operator::MinusAssign
+            | Operator::StarAssign
+            | Operator::SlashAssign
+            | Operator::RemainderAssign
+            | Operator::BitOrAssign
+            | Operator::BitXorAssign
+            | Operator::BitAndAssign
+            | Operator::RShiftAssign
+            | Operator::LShiftAssign => 10,
 
             Operator::Or => 11,
             Operator::And => 12,
@@ -90,6 +113,10 @@ impl Operator {
             Operator::Star | Operator::Slash | Operator::Remainder => 20,
 
             Operator::Negative | Operator::Positive | Operator::Not | Operator::BitNot => 21,
+
+            Operator::RParen => 22,
+
+            Operator::RBracket => 23,
         }
     }
 
@@ -145,6 +172,8 @@ impl Lexer {
                         "true" => add_token!(Token::Bool(true)),
                         "false" => add_token!(Token::Bool(false)),
                         "if" => add_token!(Token::If),
+                        "while" => add_token!(Token::While),
+                        "for" => add_token!(Token::For),
                         "else" => add_token!(Token::Else),
                         "null" => add_token!(Token::Null),
                         "fnc" => add_token!(Token::Fnc),
@@ -191,26 +220,84 @@ impl Lexer {
                         add_token!(Token::Number(
                             number.parse().expect("invalid number format"),
                         ));
-                        add_token!(Token::Dot);
+                        add_token!(Token::Op(Operator::Dot));
                     } else {
                         add_token!(Token::Number(
                             number.parse().expect("invalid number format"),
                         ));
                     }
                 }
-                '(' => add_token!(Token::RParen),
+                '(' => add_token!(Token::Op(Operator::RParen)),
                 ')' => add_token!(Token::LParen),
                 '{' => add_token!(Token::RBrace),
                 '}' => add_token!(Token::LBrace),
-                '[' => add_token!(Token::RBracket),
+                '[' => add_token!(Token::Op(Operator::RBracket)),
                 ']' => add_token!(Token::LBracket),
                 ',' => add_token!(Token::Comma),
-                '.' => add_token!(Token::Dot),
-                '+' => add_token!(Token::Op(Operator::Plus)),
-                '-' => add_token!(Token::Op(Operator::Minus)),
-                '*' => add_token!(Token::Op(Operator::Star)),
-                '/' => add_token!(Token::Op(Operator::Slash)),
-                '^' => add_token!(Token::Op(Operator::BitXor)),
+                '.' => add_token!(Token::Op(Operator::Dot)),
+                '+' => {
+                    if matches!(iter.peek(), Some(&c) if c == '=') {
+                        add_token!(Token::Op(Operator::PlusAssign));
+                        iter.next();
+                    } else {
+                        add_token!(Token::Op(Operator::Plus));
+                    }
+                }
+                '-' => {
+                    if matches!(iter.peek(), Some(&c) if c == '=') {
+                        add_token!(Token::Op(Operator::MinusAssign));
+                        iter.next();
+                    } else {
+                        add_token!(Token::Op(Operator::Minus));
+                    }
+                }
+                '*' => {
+                    if matches!(iter.peek(), Some(&c) if c == '=') {
+                        add_token!(Token::Op(Operator::StarAssign));
+                        iter.next();
+                    } else {
+                        add_token!(Token::Op(Operator::Star));
+                    }
+                }
+                '/' => {
+                    if matches!(iter.peek(), Some(&c) if c == '=') {
+                        add_token!(Token::Op(Operator::SlashAssign));
+                        iter.next();
+                    } else {
+                        add_token!(Token::Op(Operator::Slash));
+                    }
+                }
+                '&' => {
+                    if matches!(iter.peek(), Some(&c) if c == '&') {
+                        add_token!(Token::Op(Operator::And));
+                        iter.next();
+                    } else if matches!(iter.peek(), Some(&c) if c == '=') {
+                        add_token!(Token::Op(Operator::BitAndAssign));
+                        iter.next();
+                    } else {
+                        add_token!(Token::Op(Operator::BitAnd));
+                    }
+                }
+                '|' => {
+                    if matches!(iter.peek(), Some(&c) if c == '|') {
+                        add_token!(Token::Op(Operator::Or));
+                        iter.next();
+                    } else if matches!(iter.peek(), Some(&c) if c == '=') {
+                        add_token!(Token::Op(Operator::BitOrAssign));
+                        iter.next();
+                    } else {
+                        add_token!(Token::Op(Operator::BitOr));
+                    }
+                }
+                '^' => {
+                    if matches!(iter.peek(), Some(&c) if c == '=') {
+                        add_token!(Token::Op(Operator::BitXorAssign));
+                        iter.next();
+                    } else {
+                        add_token!(Token::Op(Operator::BitXor));
+                    }
+                }
+                '~' => add_token!(Token::Op(Operator::Not)),
                 '=' => {
                     if matches!(iter.peek(), Some(&c) if c == '=') {
                         add_token!(Token::Op(Operator::Equal));
@@ -219,20 +306,36 @@ impl Lexer {
                         add_token!(Token::Op(Operator::Assign));
                     }
                 }
-                '>' => {
-                    if matches!(iter.peek(), Some(&c) if c == '=') {
-                        add_token!(Token::Op(Operator::GreaterOrEqual));
-                        iter.next();
-                    } else {
-                        add_token!(Token::Op(Operator::Greater));
-                    }
-                }
                 '<' => {
                     if matches!(iter.peek(), Some(&c) if c == '=') {
                         add_token!(Token::Op(Operator::LessOrEqual));
                         iter.next();
+                    } else if matches!(iter.peek(), Some(&c) if c == '<') {
+                        iter.next();
+                        if matches!(iter.peek(), Some(&c) if c == '=') {
+                            add_token!(Token::Op(Operator::LShiftAssign));
+                            iter.next();
+                        } else {
+                            add_token!(Token::Op(Operator::LShift));
+                        }
                     } else {
                         add_token!(Token::Op(Operator::Less));
+                    }
+                }
+                '>' => {
+                    if matches!(iter.peek(), Some(&c) if c == '=') {
+                        add_token!(Token::Op(Operator::GreaterOrEqual));
+                        iter.next();
+                    } else if matches!(iter.peek(), Some(&c) if c == '>') {
+                        iter.next();
+                        if matches!(iter.peek(), Some(&c) if c == '=') {
+                            add_token!(Token::Op(Operator::RShiftAssign));
+                            iter.next();
+                        } else {
+                            add_token!(Token::Op(Operator::RShift));
+                        }
+                    } else {
+                        add_token!(Token::Op(Operator::Greater));
                     }
                 }
                 '!' => {
@@ -241,13 +344,6 @@ impl Lexer {
                         iter.next();
                     } else {
                         add_token!(Token::Op(Operator::Not));
-                    }
-                }
-                '&' => {
-                    if matches!(iter.next(), Some(c) if c == '&') {
-                        add_token!(Token::Op(Operator::And));
-                    } else {
-                        add_token!(Token::Op(Operator::BitAnd));
                     }
                 }
                 '\'' => {
@@ -275,14 +371,8 @@ impl Lexer {
                         }
                         out.push(c);
                     }
+                    self.loc.column += out.len();
                     add_token!(Token::String(out));
-                }
-                '|' => {
-                    if matches!(iter.next(), Some(c) if c == '|') {
-                        add_token!(Token::Op(Operator::Or));
-                    } else {
-                        add_token!(Token::Op(Operator::BitOr));
-                    }
                 }
                 '\n' => {
                     self.loc.column = 1;
@@ -299,6 +389,7 @@ impl Lexer {
             }
             self.loc.column += 1;
         }
+        add_token!(Token::End);
         Ok(out)
     }
 }
