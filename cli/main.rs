@@ -66,32 +66,42 @@ fn main() -> std::io::Result<()> {
                 .short("e")
                 .long("eval")
                 .value_name("input")
-                .help("evaluates a string")
+                .help("evaluates an input")
                 .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("version")
-                .short("v")
-                .long("version")
-                .help("display current blanc version"),
         )
         .arg(
             Arg::with_name("file")
                 .help("file containing the program to evaluate")
                 .index(1),
         )
+        .arg(
+            Arg::with_name("info")
+                .short("i")
+                .help("shows informations about the interpreter"),
+        )
         .get_matches();
     if let Some(value) = app.value_of("file") {
-        evaluate_file(value.to_string())?;
+        match evaluate_file(value.to_string()) {
+            Ok(()) => (),
+            Err(err) => eprintln!("{}", err),
+        };
     } else if let Some(value) = app.value_of("eval") {
         let out = blanc::evaluate(value.to_string(), None, None);
         match out {
             RResult::Ok(a) => println!("{}", a.to_string()),
-            RResult::Err(e) => eprintln!("{}", e.to_string()),
+            RResult::Err(e) => {
+                eprintln!("{}", e.to_string());
+                std::process::exit(1);
+            }
             RResult::Return(_) => unreachable!(),
         }
-    } else if let Some(_) = app.value_of("version") {
+    } else if app.value_of("version").is_some() {
         println!("blanc {}", blanc::VERSION);
+    } else if app.value_of("info").is_some() {
+        /* println!(
+            "version: {}\nrepo: {}\narch: {}\nplatform: {}",
+            blanc::VERSION
+        );*/
     } else {
         repl()?;
     }

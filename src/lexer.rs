@@ -31,6 +31,13 @@ pub enum Token {
     Comma,
     LParen,
     Semicolon,
+    Colon,
+    Imp,    // import
+    Exp,    // export
+    Als,    // alias
+    Arrow,  // ->
+    Warlus, // :=
+    Pack,   // ...
     End,
     Op(Operator),
 }
@@ -70,6 +77,7 @@ pub enum Operator {
     RShiftAssign,
     Not,
     Assign,
+    //Range,
     Dot,
     RParen,
     RBracket,
@@ -78,7 +86,7 @@ pub enum Operator {
 impl Operator {
     pub fn precedence(&self) -> u8 {
         match self {
-            Operator::Dot => 0,
+            Operator::Dot => 50,
 
             Operator::Assign
             | Operator::PlusAssign
@@ -168,13 +176,15 @@ impl Lexer {
                     while let Some(&ch) = iter.peek() {
                         if ch == '_' {
                             ident.push('_');
+                            iter.next();
                         } else if !ch.is_alphabetic() && !ch.is_ascii_digit() {
                             break;
+                        } else {
+                            ident.push(ch);
+                            iter.next();
                         }
-                        ident.push(ch);
-                        iter.next();
                     }
-                    self.loc.column += ident.len() - 1;
+                    self.loc.column += ident.len();
                     match ident.as_str() {
                         "true" => add_token!(Token::Bool(true)),
                         "false" => add_token!(Token::Bool(false)),
@@ -194,44 +204,114 @@ impl Lexer {
                     }
                 }
                 '0'..='9' => {
-                    let mut num: String = String::new();
-                    while let Some(&c) = iter.peek() {
-                        if matches!(c, c if c.is_ascii_digit() ||
-                            c == 'e' || c == '.')
-                        {
-                            num.push(c);
-                        } else if c == '-' {
-                            match num.chars().last() {
-                                Some(previous) => {
-                                    if previous != 'e' {
-                                        break;
-                                    } else {
-                                        num.push('-');
-                                    }
+                    // TODO: make this cleaner
+                    if ch == '0'
+                        && matches!(
+                            iter.peek(),
+                            Some(&'x')
+                                | Some(&'o')
+                                | Some(&'b')
+                                | Some(&'O')
+                                | Some(&'B')
+                                | Some(&'X')
+                        )
+                    {
+                        match iter.peek().unwrap() {
+                            'x' => {
+                                iter.next();
+                                let mut hex = String::new();
+                                while matches!(iter.peek(), Some(&c) if c.is_digit(16)) {
+                                    hex.push(iter.next().unwrap());
                                 }
-                                None => break,
+                                self.loc.column += hex.len();
+                                add_token!(Token::Number(
+                                    i128::from_str_radix(hex.as_str(), 16).map_err(|_| {
+                                        Error::SyntaxError(
+                                            self.loc.clone(),
+                                            "invalid hex value".to_string(),
+                                        )
+                                    })?
+                                ));
                             }
-                        } else {
-                            break;
-                        }
-                        iter.next();
-                    }
-                    self.loc.column += num.len();
-                    let mut number = format!("{}{}", ch, num);
-                    let is_float =
-                        !number.ends_with('.') && number.chars().any(|e| matches!(e, '.' | 'e'));
-                    if is_float {
-                        add_token!(Token::Float(number.parse().expect("invalid number format"),));
-                    } else if number.ends_with('.') {
-                        number.pop();
-                        add_token!(Token::Number(
-                            number.parse().expect("invalid number format"),
-                        ));
-                        add_token!(Token::Op(Operator::Dot));
+                            'b' => {
+                                iter.next();
+                                let mut bin = String::new();
+                                while matches!(iter.peek(), Some(&c) if c.is_digit(2)) {
+                                    bin.push(iter.next().unwrap());
+                                }
+                                self.loc.column += bin.len();
+                                add_token!(Token::Number(
+                                    i128::from_str_radix(bin.as_str(), 2).map_err(|_| {
+                                        Error::SyntaxError(
+                                            self.loc.clone(),
+                                            "invalid binary value".to_string(),
+                                        )
+                                    })?
+                                ));
+                            }
+
+                            'o' => {
+                                iter.next();
+                                let mut oct = String::new();
+                                while matches!(iter.peek(), Some(&c) if c.is_digit(8)) {
+                                    oct.push(iter.next().unwrap());
+                                }
+                                self.loc.column += oct.len();
+                                add_token!(Token::Number(
+                                    i128::from_str_radix(oct.as_str(), 8).map_err(|_| {
+                                        Error::SyntaxError(
+                                            self.loc.clone(),
+                                            "invalid octal value".to_string(),
+                                        )
+                                    })?
+                                ));
+                            }
+                            _ => unreachable!(), //cuz of the matches! above
+                        };
                     } else {
-                        add_token!(Token::Number(
-                            number.parse().expect("invalid number format"),
-                        ));
+                        let mut num: String = String::new();
+                        while let Some(&c) = iter.peek() {
+                            if matches!(c, c if c.is_ascii_digit() ||
+                            c == 'e' || c == '.')
+                            {
+                                num.push(c);
+                            } else if c == '-' {
+                                match num.chars().last() {
+                                    Some(previous) => {
+                                        if previous != 'e' {
+                                            break;
+                                        } else {
+                                            num.push('-');
+                                        }
+                                    }
+                                    None => break,
+                                }
+                            } else {
+                                break;
+                            }
+                            iter.next();
+                        }
+                        self.loc.column += num.len();
+                        let mut number = format!("{}{}", ch, num);
+                        let ends_with_dot = number.ends_with('.');
+
+                        if ends_with_dot {
+                            number.pop();
+                        }
+
+                        let is_float = number.chars().any(|e| matches!(e, '.' | 'e'));
+
+                        if is_float {
+                            add_token!(Token::Float(number.parse().expect("invalid float format")));
+                        } else {
+                            add_token!(Token::Number(
+                                number.parse().expect("invalid number format"),
+                            ));
+                        }
+
+                        if ends_with_dot {
+                            add_token!(Token::Op(Operator::Dot))
+                        }
                     }
                 }
                 '(' => add_token!(Token::Op(Operator::RParen)),
@@ -271,13 +351,18 @@ impl Lexer {
                         add_token!(Token::Op(Operator::SlashAssign));
                         iter.next();
                     } else if matches!(iter.peek(), Some(&'/')) {
-                        while !matches!(iter.peek(), Some(&'\n')) {
-                            iter.next();
-                        }
+                        while !matches!(iter.next(), Some('\n') | None) {}
+                    } else if matches!(iter.peek(), Some(&'*')) {
+                        iter.next();
+                        while !matches!(
+                            (iter.next(), iter.next()),
+                            (Some('*'), Some('/')) | (_, None)
+                        ) {}
                     } else {
                         add_token!(Token::Op(Operator::Slash));
                     }
                 }
+                '%' => add_token!(Token::Op(Operator::Remainder)),
                 '&' => {
                     if matches!(iter.peek(), Some(&'&')) {
                         add_token!(Token::Op(Operator::And));
@@ -391,6 +476,7 @@ impl Lexer {
                 }
                 ' ' => continue,
                 ';' => add_token!(Token::Semicolon),
+                ':' => add_token!(Token::Colon),
                 _ => {
                     return Err(Error::SyntaxError(
                         self.loc.clone(),

@@ -15,6 +15,7 @@ where
     fn checked_mul(self, other: Self) -> Option<Self>;
     fn checked_div(self, other: Self) -> Option<Self>;
     fn checked_sub(self, other: Self) -> Option<Self>;
+    fn checked_rem(self, other: Self) -> Option<Self>;
 }
 
 /// Enum for handling Ok, Err and Return values

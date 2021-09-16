@@ -7,11 +7,17 @@ use crate::{
 use std::{iter::Peekable, slice::Iter};
 
 #[derive(Debug, Clone)]
+pub struct ArgHandler {
+    pub name: Option<String>,
+    pub value: Option<Expression>,
+}
+
+#[derive(Debug, Clone)]
 pub enum Expression {
     Binary(SourceLocation, Operator, Box<Self>, Box<Self>),
     Unary(SourceLocation, Operator, Box<Self>),
-    FuncCall(SourceLocation, Box<Self>, Vec<Self>),
-    FuncDef(SourceLocation, String, Vec<String>, Box<Self>),
+    FuncCall(SourceLocation, Box<Self>, Vec<ArgHandler>),
+    FuncDef(SourceLocation, String, Vec<ArgHandler>, Box<Self>),
     Bool(SourceLocation, bool),
     Number(SourceLocation, i128),
     Float(SourceLocation, f64),
@@ -40,16 +46,21 @@ impl<'a> Parser<'a> {
         Self { tokens }
     }
 
+    #[allow(dead_code)]
     fn get_next(&mut self) -> (SourceLocation, Token) {
-        if let Some(_) = self.tokens.peek() {
+        if self.tokens.peek().is_some() {
             self.tokens.next().unwrap().clone()
         } else {
             self.tokens.clone().last().unwrap().clone()
         }
     }
 
+    fn peek(&self, len: usize) -> Option<(SourceLocation, Token)> {
+        self.tokens.clone().nth(len).map(|c| c.clone())
+    }
+
     fn get(&mut self) -> (SourceLocation, Token) {
-        if let Some(o) = self.tokens.nth(0) {
+        if let Some(o) = self.tokens.next() {
             o.clone()
         } else {
             self.tokens.clone().last().unwrap().clone()
@@ -60,25 +71,27 @@ impl<'a> Parser<'a> {
         self.tokens.next().unwrap().clone()
     }
 
-    fn _check_current(&self, token: &Token) -> bool {
+    fn check_current(&self, token: &Token) -> bool {
         matches!(self.get_without_consuming(), Some((_, tok)) if &tok == token)
     }
 
     fn get_without_consuming(&self) -> Option<(SourceLocation, Token)> {
-        self.tokens.clone().nth(0).map(|t| t.clone())
+        self.tokens.clone().next().cloned()
     }
 
+    #[allow(dead_code)]
     fn check_next(&self, token: &Token) -> bool {
         matches!(self.tokens.clone().next(), Some((_,tok)) if tok==token)
     }
 
     pub fn primary(&mut self) -> error::Result<Expression> {
-        let (loc, token) = self.tokens.next().unwrap();
+        let (loc, token) = self.tokens.next().cloned().unwrap();
+        let mut in_loop = false;
         match token {
             Token::Op(Operator::Minus) => {
                 let op = Operator::Negative;
                 Ok(Expression::Unary(
-                    loc.clone(),
+                    loc,
                     op.clone(),
                     Box::new(self.expression(op.precedence())?),
                 ))
@@ -86,7 +99,7 @@ impl<'a> Parser<'a> {
             Token::Op(Operator::Plus) => {
                 let op = Operator::Positive;
                 Ok(Expression::Unary(
-                    loc.clone(),
+                    loc,
                     op.clone(),
                     Box::new(self.expression(op.precedence())?),
                 ))
@@ -94,7 +107,7 @@ impl<'a> Parser<'a> {
             Token::Op(Operator::Not) => {
                 let op = Operator::Not;
                 Ok(Expression::Unary(
-                    loc.clone(),
+                    loc,
                     op.clone(),
                     Box::new(self.expression(op.precedence())?),
                 ))
@@ -104,7 +117,7 @@ impl<'a> Parser<'a> {
                 match self.get() {
                     (_, Token::LParen) => Ok(expr),
                     (loc, _) => Err(Error::SyntaxError(
-                        loc.clone(),
+                        loc,
                         "expected closing parenthese ')' after expression".into(),
                     )),
                 }
@@ -112,10 +125,10 @@ impl<'a> Parser<'a> {
             Token::RBrace => self.parse_block_stmt(),
             Token::Op(Operator::RBracket) => {
                 let mut elements = Vec::<Expression>::new();
-                if !self._check_current(&Token::LBracket) {
+                if !self.check_current(&Token::LBracket) {
                     loop {
                         elements.push(self.expression(0)?);
-                        if !self._check_current(&Token::Comma) {
+                        if !self.check_current(&Token::Comma) {
                             break;
                         }
                         self.advance();
@@ -125,16 +138,16 @@ impl<'a> Parser<'a> {
                     Some((_, Token::LBracket)) => self.advance(),
                     Some((loc, _)) => {
                         return Err(Error::SyntaxError(
-                            loc.clone(),
+                            loc,
                             "expected ']' after list".to_string(),
                         ))
                     }
                     _ => unreachable!(),
                 };
 
-                Ok(Expression::Array(loc.clone(), elements))
+                Ok(Expression::Array(loc, elements))
             }
-            Token::Let => self.parse_variable(loc.clone()),
+            Token::Let => self.parse_variable(loc),
             Token::If => {
                 let condition = self.expression(0)?;
                 let body = self.expression(0)?;
@@ -144,30 +157,54 @@ impl<'a> Parser<'a> {
                     else_clause = Some(Box::new(self.expression(0)?));
                 };
                 Ok(Expression::IfStmt(
-                    loc.clone(),
+                    loc,
                     Box::new(condition),
                     Box::new(body),
                     else_clause,
                 ))
             }
-            Token::Fnc => self.parse_function(loc.clone()),
-            Token::While => self.parse_while(loc.clone()),
-            //Token::For => self.parse_for(loc.clone()),
-            Token::String(s) => Ok(Expression::String(loc.clone(), s.clone())),
-            Token::Char(c) => Ok(Expression::Char(loc.clone(), *c)),
-            Token::Number(n) => Ok(Expression::Number(loc.clone(), *n)),
-            Token::Float(n) => Ok(Expression::Float(loc.clone(), *n)),
-            Token::Ident(i) => Ok(Expression::Ident(loc.clone(), i.clone())),
-            Token::Bool(b) => Ok(Expression::Bool(loc.clone(), *b)),
-            Token::Null => Ok(Expression::Null(loc.clone())),
-            Token::Break => Ok(Expression::Break(loc.clone())),
-            Token::Continue => Ok(Expression::Continue(loc.clone())),
-            Token::Return => Ok(Expression::Return(
-                loc.clone(),
-                Box::new(self.expression(0)?),
+            Token::Fnc => self.parse_function(loc),
+            Token::While => {
+                in_loop = true;
+                let out = self.parse_while(loc);
+                in_loop = false;
+                out
+            }
+            //Token::For => self.parse_for(loc),
+            Token::String(s) => Ok(Expression::String(loc, s.clone())),
+            Token::Char(c) => Ok(Expression::Char(loc, c)),
+            Token::Number(n) => Ok(Expression::Number(loc, n)),
+            Token::Float(n) => Ok(Expression::Float(loc, n)),
+            Token::Ident(i) => Ok(Expression::Ident(loc, i)),
+            Token::Bool(b) => Ok(Expression::Bool(loc, b)),
+            Token::Null => Ok(Expression::Null(loc)),
+            Token::Break => {
+                if !in_loop {
+                    Err(Error::SyntaxError(
+                        loc,
+                        "use of `break` outside loop statement".to_string(),
+                    ))
+                } else {
+                    Ok(Expression::Break(loc))
+                }
+            }
+            Token::Continue => {
+                if !in_loop {
+                    Err(Error::SyntaxError(
+                        loc,
+                        "use of `continue` outside loop statement".to_string(),
+                    ))
+                } else {
+                    Ok(Expression::Continue(loc))
+                }
+            }
+            Token::Return => Ok(Expression::Return(loc, Box::new(self.expression(0)?))),
+            Token::End => Err(Error::SyntaxError(
+                loc,
+                "unexpected end of input".to_string(),
             )),
             token => Err(Error::SyntaxError(
-                loc.clone(),
+                loc,
                 format!("unexpected token {:?}", token),
             )),
         }
@@ -175,10 +212,10 @@ impl<'a> Parser<'a> {
 
     pub fn expression(&mut self, precedence: u8) -> error::Result<Expression> {
         let mut lhs = self.primary()?;
-        while !self._check_current(&Token::Semicolon) {
+        while !self.check_current(&Token::Semicolon) {
             let (loc, token) = self.tokens.peek().unwrap();
             if let Token::Op(op) = token.clone() {
-                if op.precedence() < precedence {
+                if op.precedence() <= precedence {
                     break;
                 }
                 if op.is_binary() {
@@ -188,14 +225,31 @@ impl<'a> Parser<'a> {
                     lhs = Expression::Binary(loc.clone(), op.clone(), Box::new(lhs), Box::new(rhs));
                 } else if op.is_prefix_unary() {
                     lhs = Expression::Unary(loc.clone(), op, Box::new(lhs));
-                } else if &op == &Operator::RParen {
-                    let mut args = Vec::<Expression>::new();
+                } else if op == Operator::RParen {
+                    let mut args = Vec::<ArgHandler>::new();
                     self.advance();
 
-                    if !self._check_current(&Token::LParen) {
+                    if !self.check_current(&Token::LParen) {
                         loop {
-                            args.push(self.expression(0)?);
-                            if !self._check_current(&Token::Comma) {
+                            if matches!(self.peek(0), Some((_, Token::Ident(_))))
+                                && matches!(self.peek(1), Some((_, Token::Colon)))
+                            {
+                                let name = match self.advance() {
+                                    (_, Token::Ident(ident)) => Some(ident),
+                                    _ => unreachable!(),
+                                };
+                                let value = match self.advance() {
+                                    (_, Token::Colon) => Some(self.expression(0)?),
+                                    _ => unreachable!(),
+                                };
+                                args.push(ArgHandler { name, value });
+                            } else {
+                                args.push(ArgHandler {
+                                    name: None,
+                                    value: Some(self.expression(0)?),
+                                });
+                            }
+                            if !self.check_current(&Token::Comma) {
                                 break;
                             }
                             self.advance();
@@ -205,7 +259,7 @@ impl<'a> Parser<'a> {
                         Some((_, Token::LParen)) => self.advance(),
                         Some((loc, _)) => {
                             return Err(Error::SyntaxError(
-                                loc.clone(),
+                                loc,
                                 "expected ')' after arguments list".to_string(),
                             ))
                         }
@@ -213,7 +267,7 @@ impl<'a> Parser<'a> {
                     };
 
                     lhs = Expression::FuncCall(loc.clone(), Box::new(lhs), args);
-                } else if &op == &Operator::RBracket {
+                } else if op == Operator::RBracket {
                     self.advance();
                     let inner = self.expression(0)?;
                     lhs = match self.get_without_consuming() {
@@ -223,7 +277,7 @@ impl<'a> Parser<'a> {
                         }
                         Some((loc, _)) => {
                             return Err(Error::SyntaxError(
-                                loc.clone(),
+                                loc,
                                 "expected ']' after subscript operator".to_string(),
                             ))
                         }
@@ -248,10 +302,10 @@ impl<'a> Parser<'a> {
             _ => false,
         };
         let name = match self.advance() {
-            (_, Token::Ident(ident)) => ident.clone(),
+            (_, Token::Ident(ident)) => ident,
             (loc, _) => {
                 return Err(Error::SyntaxError(
-                    loc.clone(),
+                    loc,
                     "expected identifier in variable name".to_string(),
                 ))
             }
@@ -268,9 +322,9 @@ impl<'a> Parser<'a> {
 
     fn parse_block_stmt(&mut self) -> error::Result<Expression> {
         let mut stmts = vec![];
-        while !self._check_current(&Token::LBrace) {
+        while !self.check_current(&Token::LBrace) {
             let stmt = self.expression(0)?;
-            if !self._check_current(&Token::Semicolon) {
+            if !self.check_current(&Token::Semicolon) {
                 return Err(Error::SyntaxError(
                     self.get().0,
                     "expected ';' after statement".to_string(),
@@ -282,7 +336,7 @@ impl<'a> Parser<'a> {
         match self.get() {
             (loc, Token::LBrace) => Ok(Expression::Block(loc, stmts)),
             (loc, _) => Err(Error::SyntaxError(
-                loc.clone(),
+                loc,
                 "expected closing parenthese '}' after block".into(),
             )),
         }
@@ -303,10 +357,7 @@ impl<'a> Parser<'a> {
 
     fn parse_function(&mut self, loc: SourceLocation) -> error::Result<Expression> {
         let name = match self.advance() {
-            (_, Token::Ident(name)) => {
-                self.advance();
-                name.clone()
-            }
+            (_, Token::Ident(name)) => name,
             (loc, _) => {
                 return Err(Error::SyntaxError(
                     loc,
@@ -314,77 +365,83 @@ impl<'a> Parser<'a> {
                 ))
             }
         };
-        let mut args: Vec<String> = Vec::new();
-        if !self._match(&[Token::LParen]) {
-            let mut curr = None::<&(SourceLocation, Token)>;
+        match self.get_without_consuming() {
+            Some((_, Token::Op(Operator::RParen))) => self.advance(),
+            Some((loc, _)) => {
+                return Err(Error::SyntaxError(
+                    loc,
+                    "expected '(' after function name".to_string(),
+                ))
+            }
+            _ => unreachable!(),
+        };
+        let mut args: Vec<ArgHandler> = Vec::new();
+        if !self.check_current(&Token::LParen) {
             loop {
-                let ident = match self.advance() {
-                    (_, Token::Ident(ident)) => ident.clone(),
-                    (loc, _) => {
+                match self.get_without_consuming() {
+                    Some((_, Token::Ident(ident))) => {
+                        self.advance();
+                        if matches!(
+                            self.get_without_consuming(),
+                            Some((_, Token::Op(Operator::Assign)))
+                        ) {
+                            let value = match self.advance() {
+                                (_, Token::Op(Operator::Assign)) => Some(self.expression(0)?),
+                                (_, op) => unreachable!(),
+                            };
+                            args.push(ArgHandler {
+                                name: Some(ident),
+                                value,
+                            });
+                        } else {
+                            args.push(ArgHandler {
+                                name: Some(ident),
+                                value: None,
+                            })
+                        }
+                    }
+                    Some((loc, _)) => {
                         return Err(Error::SyntaxError(
                             loc,
                             "expected identifier in function argument".to_string(),
-                        ))
+                        ));
                     }
+                    _ => unreachable!(),
                 };
-                args.push(ident);
-                let temp = self.check_current(&Token::Comma);
-                curr = temp.0;
-                if !temp.1 {
+                if !self.check_current(&Token::Comma) {
                     break;
                 }
+                self.advance();
             }
-            match curr {
-                Some((_, Token::LParen)) => (),
-                Some((loc, _)) => {
-                    return Err(Error::SyntaxError(
-                        loc.clone(),
-                        "expected ')' after arguments list".to_string(),
-                    ))
-                }
-                _ => {
-                    return Err(Error::Error(
-                        "expected ')' after arguments list".to_string(),
-                    ))
-                }
-            };
         }
+        match self.get_without_consuming() {
+            Some((_, Token::LParen)) => self.advance(),
+            Some((loc, _)) => {
+                return Err(Error::SyntaxError(
+                    loc,
+                    "expected ')' after arguments list".to_string(),
+                ))
+            }
+            _ => unreachable!(),
+        };
+
         let body = match self.advance() {
             (_, Token::RBrace) => self.parse_block_stmt()?,
             (loc, _) => {
                 return Err(Error::SyntaxError(
-                    loc.clone(),
+                    loc,
                     "expected '{' after function declaration".to_string(),
                 ));
             }
         };
-        Ok(Expression::FuncDef(loc.clone(), name, args, Box::new(body)))
-    }
-
-    fn check(&mut self, token_: &Token) -> bool {
-        matches!(self.tokens.peek(), Some((_, token)) if token == token_)
-    }
-
-    fn _match(&mut self, tokens: &[Token]) -> bool {
-        for token in tokens {
-            if self.check(token) {
-                self.advance();
-                return true;
-            }
-        }
-        false
-    }
-
-    fn check_current(&mut self, token_: &Token) -> (Option<&(SourceLocation, Token)>, bool) {
-        let token = self.tokens.next();
-        (token, matches!(token, Some((_, token)) if token == token_))
+        Ok(Expression::FuncDef(loc, name, args, Box::new(body)))
     }
 
     pub fn parse(&mut self) -> error::Result<Vec<Expression>> {
         let mut exprs = vec![];
-        while !self._check_current(&Token::End) {
+        while !self.check_current(&Token::End) {
             let expr = self.expression(0)?;
-            if !self._check_current(&Token::Semicolon) {
+            if !self.check_current(&Token::Semicolon) {
                 return Err(Error::SyntaxError(
                     self.get_without_consuming().unwrap().0,
                     "expected ';' after statement".to_string(),

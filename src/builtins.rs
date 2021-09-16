@@ -1,15 +1,15 @@
-use crate::eval::Context;
+use crate::context::Context;
 
 use std::lazy::SyncLazy;
 
-/// habdles the member functions/constants for built-in types
+/// handles the member functions/constants for built-in types
 /// TODO: complete this
 pub(crate) static NUM_CONTEXT: SyncLazy<Context> = SyncLazy::new(|| {
     let mut ctx = Context::new();
     ctx.func1("to_string", |_self: i128| -> String { _self.to_string() });
     ctx.func1("chr", |_self: i128| -> String { _self.to_string() });
     ctx.func1("abs", |_self: i128| -> i128 {
-        if _self < -1i128 {
+        if _self < 0i128 {
             -_self
         } else {
             _self

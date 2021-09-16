@@ -22,6 +22,10 @@ pub mod parser;
 pub mod source_location;
 /// module for utilties
 pub mod utils;
+/// module for value representation
+pub mod value;
+
+pub mod context;
 
 /// blanc current version
 pub static VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -40,7 +44,7 @@ pub static VERSION: &str = env!("CARGO_PKG_VERSION");
 pub fn evaluate(
     input: String,
     file: Option<String>,
-    context: Option<crate::eval::Context>,
+    context: Option<crate::context::Context>,
 ) -> crate::utils::RResult<String, String, ()> {
     use crate::{
         error::{format_err, Error},
@@ -59,28 +63,16 @@ pub fn evaluate(
     let mut parser = Parser::new(iter);
     let parsed = match parser.parse() {
         Result::Ok(out) => out,
-        Result::Err(err) => match err {
-            Error::SyntaxError(ref loc, ..) => {
-                return Err(format_err(err.clone(), input, loc.clone()))
-            }
-            _ => return Err(err.to_string()),
-        },
+        Result::Err(err) => return Err(format_err(err, input.clone())),
     };
     let mut eval = match context {
         Some(ctx) => Eval::with_context(parsed, ctx),
         _ => Eval::new(parsed),
     };
+    // TODO: new way of handling source location
     match eval.eval() {
         Ok(result) => Ok(result.to_string()),
-        Err(err) => match err {
-            Error::TypeError(ref loc, ..) => {
-                return Err(format_err(err.clone(), input, loc.clone()))
-            }
-            Error::RuntimeError(ref loc, ..) => {
-                return Err(format_err(err.clone(), input, loc.clone()))
-            }
-            _ => return Err(err.to_string()),
-        },
+        Err(err) => Err(format_err(err, input)),
         Return(_) => unreachable!(),
     }
 }

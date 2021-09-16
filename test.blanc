@@ -1,28 +1,21 @@
-let x = 1;
-let y = 2;
-
-let z = x + y;
-print(x, '+', y, '=', z);
-
-fnc get_1() {
-    return 1;
+fnc do_stuff(a, b, c) {
+   print("a is", a, "b is", b, "c is", c);
 };
-fnc get_2() {
-    return 2;
-};
-print(get_1() + get_2());
+do_stuff(b: 2, c: 3, a: 1);
+do_stuff(1, c: 3, 2); // can appear in any order in function call
+do_stuff(c: 3, 1, 2);
+do_stuff(1, 2, 3);
 
-fnc fact(x) {
-   if x <= 1 {
-      return x;
-   } else {
-      return x*fact(x-1);
-   };
-};
-print(fact(5));
 
-let x = 0;
-while x < 100 {
-   x = x + 1;
+fnc foo(a) {
+   print(a);
 };
-print("x =", x);
+
+let x = 3;
+let y = x;
+{
+   let a = 1;
+   x = a;
+};
+
+foo(y);

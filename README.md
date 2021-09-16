@@ -1,12 +1,12 @@
 # blanc
 yet another (WIP) programming language
 
-# Example
+## Example
 ```blanc
 print("hello, world!");
 ```
 
-# Data types
+## Data types
 ```blanc
 1; // integer
 
@@ -19,14 +19,14 @@ false; // bool
 
 'a'; // char
 
-[1,2,3, true, ..]; // array
+[1,2,3, true]; // array
 
 {"hello": 5}; // map soon™
 
 (12, "hello", false, "there"); // tuple soon™
 ```
 
-# Variables
+## Variables
 variables are declared with the `let` keyword
 
 ```blanc
@@ -43,9 +43,8 @@ let a = {
 }; // can also use blocks, by default a null is returned unless if there is a return statement
 ```
 
-# Functions
-functions are prefixed with the `fnc` keyword
-
+## Functions
+function definition starts with the `fnc` keyword, like
 ```blanc
 fnc get_1() {
     return 1;
@@ -56,7 +55,27 @@ fnc get_2() {
 print(get_1() + get_2());
 ```
 
-# Control Flow
+blanc also supports keyword argumnets as `arg: value`
+```blanc
+fnc do_stuff(a, b, c) {
+   print("a is", a, "b is", b, "c is", c);
+};
+do_stuff(b: 2, c: 3, a: 1); 
+do_stuff(1, c: 3, 2); // can appear in any order in function call
+do_stuff(c: 3, 1, 2);
+do_stuff(1, 2, 3);
+```
+
+as well as default argumens
+```blanc
+fnc foo(a, b = 3) {
+   return a + b; 
+}
+foo(1); // 4
+foo(1, 2); // 3
+```
+
+## Control Flow
 ```blanc
 fnc fact(x) {
    if x <= 1 {
@@ -68,7 +87,7 @@ fnc fact(x) {
 print("3! =", x);
 ```
 
-# Loops
+## Loops
 ```blanc
 let x = 0;
 while x <= 100 {
@@ -77,5 +96,6 @@ while x <= 100 {
 print("x =", x);
 ```
 `note` break, continue statements are not supported yet
+
 
 and that's all for now.
