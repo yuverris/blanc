@@ -22,6 +22,7 @@ pub enum Token {
     Lm,
     Let,
     Imm,
+    In,
     If,
     Else,
     RBrace,
@@ -34,7 +35,6 @@ pub enum Token {
     Colon,
     Imp,    // import
     Exp,    // export
-    Als,    // alias
     Arrow,  // ->
     Warlus, // :=
     Pack,   // ...
@@ -191,6 +191,7 @@ impl Lexer {
                         "if" => add_token!(Token::If),
                         "while" => add_token!(Token::While),
                         "for" => add_token!(Token::For),
+                        "in" => add_token!(Token::In),
                         "else" => add_token!(Token::Else),
                         "null" => add_token!(Token::Null),
                         "fnc" => add_token!(Token::Fnc),
@@ -199,7 +200,6 @@ impl Lexer {
                         "return" => add_token!(Token::Return),
                         "let" => add_token!(Token::Let),
                         "imm" => add_token!(Token::Imm),
-                        "lm" => add_token!(Token::Lm),
                         _ => add_token!(Token::Ident(ident)),
                     }
                 }
@@ -302,11 +302,17 @@ impl Lexer {
                         let is_float = number.chars().any(|e| matches!(e, '.' | 'e'));
 
                         if is_float {
-                            add_token!(Token::Float(number.parse().expect("invalid float format")));
+                            add_token!(Token::Float(number.parse().map_err(
+                                |e: std::num::ParseFloatError| {
+                                    Error::SyntaxError(self.loc.clone(), e.to_string())
+                                }
+                            )?));
                         } else {
-                            add_token!(Token::Number(
-                                number.parse().expect("invalid number format"),
-                            ));
+                            add_token!(Token::Number(number.parse().map_err(
+                                |e: std::num::ParseIntError| {
+                                    Error::SyntaxError(self.loc.clone(), e.to_string())
+                                }
+                            )?,));
                         }
 
                         if ends_with_dot {
@@ -333,6 +339,9 @@ impl Lexer {
                 '-' => {
                     if matches!(iter.peek(), Some(&'=')) {
                         add_token!(Token::Op(Operator::MinusAssign));
+                        iter.next();
+                    } else if matches!(iter.peek(), Some(&'>')) {
+                        add_token!(Token::Arrow);
                         iter.next();
                     } else {
                         add_token!(Token::Op(Operator::Minus));
@@ -461,7 +470,7 @@ impl Lexer {
                 }
                 '"' => {
                     let mut out: String = String::new();
-                    while let Some(c) = iter.next() {
+                    for c in iter.by_ref() {
                         if c == '"' {
                             break;
                         }

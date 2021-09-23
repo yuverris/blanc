@@ -1,12 +1,20 @@
-use crate::value::{FunctionType, Value};
-use std::{collections::HashMap, convert::TryFrom, rc::Rc};
+use crate::source_location::SourceLocation;
+use crate::value::{ConvertionError, FunctionType, Value};
+use std::error::Error;
+use std::{
+    collections::{HashMap, HashSet},
+    convert::{TryFrom, TryInto},
+    rc::Rc,
+};
+
+type BError = crate::error::Error;
+
+type FResult<T> = Result<T, Box<dyn Error>>;
 
 /// Struct for storing functions/constants to be used in an expression
 #[derive(Clone)]
 pub struct Context {
-    variables: HashMap<String, Value>,
-    functions: HashMap<String, FunctionType>,
-    user_functions: HashMap<String, Value>,
+    pub defs: HashMap<String, Value>,
 }
 
 impl Default for Context {
@@ -19,9 +27,7 @@ impl Context {
     /// construct a new Context with empty variables/functions
     pub fn new() -> Self {
         Self {
-            variables: HashMap::new(),
-            functions: HashMap::new(),
-            user_functions: HashMap::new(),
+            defs: HashMap::new(),
         }
     }
 
@@ -38,82 +44,92 @@ impl Context {
             0,
             true,
         );
-        ctx.func(
+        /*ctx.func(
             "copy",
             &|args: &[Value]| {
                 let arg = &args[0];
                 match arg {
-                    r @ Value::Ref(_) => r.clone().read().map_err(ToString::to_string),
+                    r @ Value::Ref(_) => r.clone().read(),
                     _ => Ok(arg.clone()),
                 }
             },
             1,
             false,
-        );
-        ctx.func1("prompt", |inp: String| -> String {
+        );*/
+        ctx.func1("prompt", |inp: String| -> Result<String, Box<dyn Error>> {
             use std::io::Write;
             let mut out = String::new();
             print!("{}", inp);
-            std::io::stdout().flush().unwrap();
-            std::io::stdin().read_line(&mut out).unwrap();
+            std::io::stdout().flush()?;
+            std::io::stdin().read_line(&mut out)?;
             out = out.trim_end().into();
-            out
+            Ok(out)
+        });
+        ctx.func0("time", || -> Result<f64, Box<dyn Error>> {
+            use std::time::SystemTime;
+            Ok(SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_secs_f64())?)
         });
         ctx
     }
 
-    /// Adds a new variable
+    /// Defines a new value and assign it to an indetifier
     ///
     /// # Example
     ///
     /// ```rust
-    /// use blanc::eval::{Context, Value};
+    /// use blanc::{context::Context, value::Value};
     /// let mut ctx = Context::new();
-    /// ctx.var("foo", 5.0, false);
+    /// ctx.def("foo", 5.0, false);
     /// ```
-    pub fn var<S, T>(&mut self, name: S, value: T, immutable: bool)
+    pub fn def<S>(&mut self, name: S, value: Value)
     where
         S: ToString,
-        T: Into<Value>,
     {
-        self.variables.insert(name.to_string(), value.into());
+        self.defs.insert(name.to_string(), value);
     }
 
-    /// Fetch a variable
+    /// Fetches a definition
     ///
     /// # Example
     ///
     /// ```rust
-    /// use blanc::eval::{Context, Value};
+    /// use blanc::{context::Context, value::Value};
     /// let mut ctx = Context::new();
     /// let name = String::from("foo");
     /// ctx.var(name.clone(), 5.0, false));
     /// assert_eq!(ctx.get_var(name.clone()), Some(&Value::from(5.0)));
     /// ```
-    pub fn get_var(&self, name: String) -> Option<&Value> {
-        self.variables.get(&name)
+    pub fn get_def(&self, name: String) -> Option<&Value> {
+        self.defs.get(&name)
     }
 
-    pub fn get_mut_var(&mut self, name: String) -> Option<&mut Value> {
-        self.variables.get_mut(&name)
+    pub fn get_mut_def(&mut self, name: String) -> Option<&mut Value> {
+        self.defs.get_mut(&name)
     }
 
-    /// Fetch a function
+    /// Fetches a definition and cast it as a function
     ///
     /// # Example
     ///
     /// ```rust
-    /// use blanc::eval::{Context, Value};
+    /// use blanc::{context::Context, value::Value};
     /// let ctx = Context::with_builtins();
-    /// let function = ctx.get_function("sqrt".to_string()).unwrap();
+    /// let function = ctx.get_function("print".to_string()).unwrap();
     /// assert_eq!(function(&[Value::Float(25.0)]), Ok(Value::from(5.0)));
     /// ```
     pub fn get_func(&self, name: String) -> Option<&FunctionType> {
-        self.functions.get(&name)
+        match self.defs.get(&name) {
+            Some(Value::Func(f, _)) => Some(f),
+            _ => None,
+        }
     }
 
-    pub fn get_user_function(&self, name: String) -> Option<&Value> {
-        self.user_functions.get(&name)
+    /// Returns a new Context that contains definitions that aren't present in both context, useful
+    /// for getting a single block's definitions excluding parent's definition
+    pub fn difference(&self, other: &Context) -> Context {
+        Context { defs: self.defs }
     }
 
     /// Adds a new function
@@ -121,11 +137,11 @@ impl Context {
     /// # Exampke
     ///
     /// ```rust
-    /// fn function(_: &[Value]) -> Result<Value, String> {
+    /// use blanc::{context::Context, value::Value, source_location::SourceLocation};
+    /// fn function(_: &[Value], _: SourceLocation) -> Result<Value, String> {
     ///      Ok(Value::Float(5.0))
     /// }
     /// fn main() {
-    ///      use blanc::eval::{Context, Value};
     ///      let mut ctx = Context::new();
     ///      ctx.func("get_five".to_string(), function, 0, false);
     /// }
@@ -133,25 +149,22 @@ impl Context {
     pub fn func<S>(
         &mut self,
         name: S,
-        func: &'static dyn Fn(&[Value]) -> Result<Value, String>,
+        func: &'static dyn Fn(&[Value]) -> FResult<Value>,
         arg_count: usize,
         inf_args: bool,
     ) where
         S: ToString,
     {
-        let fnc = move |args: &[Value]| {
+        let fnc = move |args: &[Value], loc: SourceLocation| {
             if args.len() != arg_count && !inf_args {
-                Err(format!("umatched arguments count function requires {} arguments, you supplied {} arguments",
-                            arg_count, args.len()))
+                Err(BError::Error(loc, format!("umatched arguments count function requires {} arguments, you supplied {} arguments",
+                            arg_count, args.len())).into())
             } else {
-                func(args)
+                func(args).map_err(|e| e)
             }
         };
-        self.functions.insert(name.to_string(), Rc::new(fnc));
-    }
-
-    pub fn user_function(&mut self, name: String, fnc: Value) {
-        self.user_functions.insert(name, fnc);
+        self.defs
+            .insert(name.to_string(), Value::Func(Rc::new(fnc), None));
     }
 
     ///
@@ -160,32 +173,32 @@ impl Context {
     /// # Example
     ///
     /// ```rust
+    /// use blanc::{context::Context, value::Value, source_location::SourceLocation};
     /// // any argument type/return type is allowed as long as it's convertible to eval::Value
-    /// fn function() -> &str {
-    ///     "hello"
+    /// fn function(_: SourceLocation) -> Result<&'static str, Error> {
+    ///     Ok("hello")
     /// }
     /// fn main() {
-    ///      use blanc::eval::{Context, Value};
     ///      let mut ctx = Context::new();
-    ///      ctx.func0("hello".to_string(), function);
+    ///      ctx.func0("say_hello".to_string(), function);
     /// }
     /// ```
     pub fn func0<S, F, U>(&mut self, name: S, func: F)
     where
         S: ToString,
-        U: Into<Value>,
-        F: Fn() -> U + 'static,
+        U: TryInto<Value, Error = ConvertionError>,
+        F: Fn() -> FResult<U> + 'static,
     {
-        let fnc = move |args: &[Value]| -> Result<Value, String> {
+        let fnc = move |args: &[Value], loc: SourceLocation| -> FResult<Value> {
             if !args.is_empty() {
-                Err(format!("umatched arguments count function doesn't require any arguments, you supplied {} arguments",
-                            args.len()))
+                Err(BError::Error(loc, format!("umatched arguments count function doesn't require any arguments, you supplied {} arguments",
+                            args.len())).into())
             } else {
-                Value::try_from(func())
-                    .map_err(|_| "failed to convert function return type".to_string())
+                func()?.try_into().map_err(|e| e.into())
             }
         };
-        self.functions.insert(name.to_string(), Rc::new(fnc));
+        self.defs
+            .insert(name.to_string(), Value::Func(Rc::new(fnc), None));
     }
 
     /// Adds a new function that accepts a single argument
@@ -193,12 +206,13 @@ impl Context {
     /// # Example
     ///
     /// ```rust
+    /// use blanc::{context::Context, value::Value, source_location::SourceLocation};
     /// // any argument type/return type is allowed as long as it's convertible to eval::Value
     /// fn function(arg: f64) -> f64 {
     ///      arg + 2.0
     /// }
     /// fn main() {
-    ///      use blanc::eval::{Context, Value};
+    ///      use blanc::{context::Context, value::Value};
     ///      let mut ctx = Context::new();
     ///      ctx.func1("add_two".to_string(), function);
     /// }
@@ -206,21 +220,21 @@ impl Context {
     pub fn func1<S, F, T, U>(&mut self, name: S, func: F)
     where
         S: ToString,
-        T: TryFrom<Value, Error = String>,
-        U: Into<Value>,
-        F: Fn(T) -> U + 'static,
+        T: TryFrom<Value, Error = ConvertionError>,
+        U: TryInto<Value, Error = ConvertionError>,
+        F: Fn(T) -> FResult<U> + 'static,
     {
-        let fnc = move |args: &[Value]| -> Result<Value, String> {
+        let fnc = move |args: &[Value], loc: SourceLocation| -> FResult<Value> {
             if args.len() != 1 {
-                Err(format!("umatched arguments count function requires a single argument, you supplied {} arguments",
-                            args.len()))
+                Err(BError::Error(loc, format!("umatched arguments count function requires a single argument, you supplied {} arguments",
+                            args.len())).into())
             } else {
                 let arg: T = T::try_from(args[0].clone())?;
-                Ok(func(arg).into())
-                //.map_err(|_| "failed to convert function return type".to_string())
+                func(arg)?.try_into().map_err(|e| e.into())
             }
         };
-        self.functions.insert(name.to_string(), Rc::new(fnc));
+        self.defs
+            .insert(name.to_string(), Value::Func(Rc::new(fnc), None));
     }
 
     /// Adds a new function that accepts two arguments
@@ -228,12 +242,13 @@ impl Context {
     /// # Example
     ///
     /// ```rust
+    /// use blanc::{context::Context, value::Value, source_location::SourceLocation};
     /// // any argument type/return type is allowed as long as it's convertible to eval::Value
     /// fn function(a: i128, b: i128) -> i128 {
     ///      a + b
     /// }
     /// fn main() {
-    ///      use blanc::eval::{Context, Value};
+    ///      use blanc::{context::Context, value::Value};
     ///      let mut ctx = Context::new();
     ///      ctx.func2("sum2", function);
     /// }
@@ -241,23 +256,23 @@ impl Context {
     pub fn func2<S, F, T, U, J>(&mut self, name: S, func: F)
     where
         S: ToString,
-        T: TryFrom<Value, Error = String>,
-        U: TryFrom<Value, Error = String>,
-        J: Into<Value>,
-        F: Fn(T, U) -> J + 'static,
+        T: TryFrom<Value, Error = ConvertionError>,
+        U: TryFrom<Value, Error = ConvertionError>,
+        J: TryInto<Value, Error = ConvertionError>,
+        F: Fn(T, U) -> FResult<J> + 'static,
     {
-        let fnc = move |args: &[Value]| {
+        let fnc = move |args: &[Value], loc: SourceLocation| -> FResult<Value> {
             if args.len() != 2 {
-                Err(format!("umatched arguments count function requires 2 arguments, you supplied {} arguments",
-                            args.len()))
+                Err(BError::Error(loc, format!("umatched arguments count function requires 2 arguments, you supplied {} arguments",
+                            args.len())).into())
             } else {
                 let arg1: T = T::try_from(args[0].clone())?;
                 let arg2: U = U::try_from(args[1].clone())?;
-                Value::try_from(func(arg1, arg2))
-                    .map_err(|_| "failed to convert function return type".to_string())
+                func(arg1, arg2)?.try_into().map_err(|e| e.into())
             }
         };
-        self.functions.insert(name.to_string(), Rc::new(fnc));
+        self.defs
+            .insert(name.to_string(), Value::Func(Rc::new(fnc), None));
     }
 
     /// Adds a new function that accepts three arguments
@@ -265,38 +280,39 @@ impl Context {
     /// # Example
     ///
     /// ```rust
+    /// use blanc::{context::Context, value::Value, source_location::SourceLocation};
     /// // any argument type/return type is allowed as long as it's convertible to eval::Value
     /// fn function(a: i128, b: i128, c: i128) -> i128 {
     ///      a + b + c
     /// }
     /// fn main() {
-    ///      use blanc::eval::{Context, Value};
+    ///      use blanc::{context::Context, value::Value};
     ///      let mut ctx = Context::new();
     ///      ctx.func3("sum3", function);
     /// }
     /// ```
-    pub fn func3<S, F, T, U, J, V>(&mut self, name: String, func: F)
+    pub fn func3<S, F, T, U, J, V>(&mut self, name: S, func: F)
     where
         S: ToString,
-        T: TryFrom<Value, Error = String>,
-        U: TryFrom<Value, Error = String>,
-        J: TryFrom<Value, Error = String>,
-        V: Into<Value>,
-        F: Fn(T, U, J) -> V + 'static,
+        T: TryFrom<Value, Error = ConvertionError>,
+        U: TryFrom<Value, Error = ConvertionError>,
+        J: TryFrom<Value, Error = ConvertionError>,
+        V: TryInto<Value, Error = ConvertionError>,
+        F: Fn(T, U, J) -> FResult<V> + 'static,
     {
-        let fnc = move |args: &[Value]| {
+        let fnc = move |args: &[Value], loc: SourceLocation| -> FResult<Value> {
             if args.len() != 3 {
-                Err(format!("umatched arguments count function requires 3 arguments, you supplied {} arguments",
-                            args.len()))
+                Err(BError::Error(loc, format!("umatched arguments count function requires 3 arguments, you supplied {} arguments",
+                            args.len())).into())
             } else {
                 let arg1: T = T::try_from(args[0].clone())?;
                 let arg2: U = U::try_from(args[1].clone())?;
                 let arg3: J = J::try_from(args[2].clone())?;
-                Value::try_from(func(arg1, arg2, arg3))
-                    .map_err(|_| "failed to convert function return type".to_string())
+                func(arg1, arg2, arg3)?.try_into().map_err(|e| e.into())
             }
         };
-        self.functions.insert(name, Rc::new(fnc));
+        self.defs
+            .insert(name.to_string(), Value::Func(Rc::new(fnc), None));
     }
 
     /// Adds a new function that accepts four arguments
@@ -304,12 +320,13 @@ impl Context {
     /// # Example
     ///
     /// ```rust
+    /// use blanc::{context::Context, value::Value, source_location::SourceLocation};
     /// // any argument type/return type is allowed as long as it's convertible to eval::Value
-    /// fn function(a: i128, b: i128, c: i128, d: i128) -> i128 {
-    ///      a + b + c + d
+    /// fn function(a: i128, b: i128, c: i128, d: i128, _: SourceLocation) -> Result<i128, Error> {
+    ///      Ok(a + b + c + d)
     /// }
     /// fn main() {
-    ///      use blanc::eval::{Context, Value};
+    ///      use blanc::{context::Context, value::Value};
     ///      let mut ctx = Context::new();
     ///      ctx.func4("sum4", function);
     /// }
@@ -317,27 +334,29 @@ impl Context {
     pub fn func4<S, F, T, U, J, V, Z>(&mut self, name: S, func: F)
     where
         S: ToString,
-        T: TryFrom<Value, Error = String>,
-        U: TryFrom<Value, Error = String>,
-        J: TryFrom<Value, Error = String>,
-        V: TryFrom<Value, Error = String>,
-        Z: Into<Value>,
-        F: Fn(T, U, J, V) -> Z + 'static,
+        T: TryFrom<Value, Error = ConvertionError>,
+        U: TryFrom<Value, Error = ConvertionError>,
+        J: TryFrom<Value, Error = ConvertionError>,
+        V: TryFrom<Value, Error = ConvertionError>,
+        Z: TryInto<Value, Error = ConvertionError>,
+        F: Fn(T, U, J, V) -> FResult<Z> + 'static,
     {
-        let fnc = move |args: &[Value]| {
+        let fnc = move |args: &[Value], loc: SourceLocation| -> FResult<Value> {
             if args.len() != 4 {
-                Err(format!("umatched arguments count function requires 4 arguments, you supplied {} arguments",
-                            args.len()))
+                Err(BError::Error(loc, format!("umatched arguments count function requires 4 arguments, you supplied {} arguments",
+                            args.len())).into())
             } else {
                 let arg1: T = T::try_from(args[0].clone())?;
                 let arg2: U = U::try_from(args[1].clone())?;
                 let arg3: J = J::try_from(args[2].clone())?;
                 let arg4: V = V::try_from(args[3].clone())?;
-                Value::try_from(func(arg1, arg2, arg3, arg4))
-                    .map_err(|_| "failed to convert function return type".to_string())
+                func(arg1, arg2, arg3, arg4)?
+                    .try_into()
+                    .map_err(|e| e.into())
             }
         };
-        self.functions.insert(name.to_string(), Rc::new(fnc));
+        self.defs
+            .insert(name.to_string(), Value::Func(Rc::new(fnc), None));
     }
 
     /// Adds a new function that accepts five arguments
@@ -345,12 +364,13 @@ impl Context {
     /// # Example
     ///
     /// ```rust
+    /// use blanc::{context::Context, value::Value};
     /// // any argument type/return type is allowed as long as it's convertible to eval::Value
-    /// fn function(a: i128, b: i128, c: i128, d: i128, j: i128) -> f64 {
-    ///      a + b + c + d + j
+    /// fn function(a: i128, b: i128, c: i128, d: i128, j: i128) -> Result<i128, Box<dyn Error>> {
+    ///      Ok(a + b + c + d + j)
     /// }
     /// fn main() {
-    ///      use blanc::eval::{Context, Value};
+    ///      use blanc::{context::Context, value::Value};
     ///      let mut ctx = Context::new();
     ///      ctx.func5("sum5", function);
     /// }
@@ -358,29 +378,31 @@ impl Context {
     pub fn func5<S, F, T, U, J, V, Z, Y>(&mut self, name: S, func: F)
     where
         S: ToString,
-        T: TryFrom<Value, Error = String>,
-        U: TryFrom<Value, Error = String>,
-        J: TryFrom<Value, Error = String>,
-        V: TryFrom<Value, Error = String>,
-        Z: TryFrom<Value, Error = String>,
-        Y: Into<Value>,
-        F: Fn(T, U, J, V, Z) -> Y + 'static,
+        T: TryFrom<Value, Error = ConvertionError>,
+        U: TryFrom<Value, Error = ConvertionError>,
+        J: TryFrom<Value, Error = ConvertionError>,
+        V: TryFrom<Value, Error = ConvertionError>,
+        Z: TryFrom<Value, Error = ConvertionError>,
+        Y: TryInto<Value, Error = ConvertionError>,
+        F: Fn(T, U, J, V, Z) -> FResult<Y> + 'static,
     {
-        let fnc = move |args: &[Value]| {
+        let fnc = move |args: &[Value], loc: SourceLocation| -> FResult<Value> {
             if args.len() != 4 {
-                Err(format!("umatched arguments count function requires 5 arguments, you supplied {} arguments",
-                            args.len()))
+                Err(BError::Error(loc, format!("umatched arguments count function requires 5 arguments, you supplied {} arguments",
+                            args.len())).into())
             } else {
                 let arg1: T = T::try_from(args[0].clone())?;
                 let arg2: U = U::try_from(args[1].clone())?;
                 let arg3: J = J::try_from(args[2].clone())?;
                 let arg4: V = V::try_from(args[3].clone())?;
                 let arg5: Z = Z::try_from(args[4].clone())?;
-                Value::try_from(func(arg1, arg2, arg3, arg4, arg5))
-                    .map_err(|_| "failed to convert function return type".to_string())
+                func(arg1, arg2, arg3, arg4, arg5)?
+                    .try_into()
+                    .map_err(|e| e.into())
             }
         };
-        self.functions.insert(name.to_string(), Rc::new(fnc));
+        self.defs
+            .insert(name.to_string(), Value::Func(Rc::new(fnc), None));
     }
 }
 

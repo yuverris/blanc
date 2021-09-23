@@ -1,8 +1,15 @@
+use crate::context::Context;
 use crate::parser::{ArgHandler, Expression};
+use crate::source_location::SourceLocation;
 use crate::utils::FloatExt;
 use std::cmp::Ordering;
 use std::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Neg, Not, Rem, Shl, Shr, Sub};
-use std::{convert::TryFrom, fmt, rc::Rc};
+use std::{
+    convert::{TryFrom, TryInto},
+    fmt,
+    lazy::SyncLazy,
+    rc::Rc,
+};
 
 /// Enum for handling objects
 ///
@@ -37,10 +44,12 @@ pub enum Value {
     Array(Vec<Self>),
     Null,
     Void,
+    /// need some sort of another workaround, subject to change
     Ref(*mut Value),
 }
 
-pub type FunctionType = Rc<dyn Fn(&[Value]) -> Result<Value, String>>;
+pub type FunctionType =
+    Rc<dyn Fn(&[Value], SourceLocation) -> Result<Value, Box<dyn std::error::Error>>>;
 
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
@@ -119,6 +128,22 @@ impl Value {
             Value::UserFunc { .. } => "function",
             Value::Void => "void",
             Value::Ref(inner) => unsafe { inner.as_ref().unwrap().get_type() },
+        }
+    }
+
+    // a nice workaround for accessing member definitions
+    pub fn get_index(&self) -> usize {
+        match &self {
+            Value::Number(_) => 0,
+            Value::Float(_) => 1,
+            Value::Char(_) => 2,
+            Value::Bool(_) => 3,
+            Value::String(_) => 4,
+            Value::Func(..) => 5,
+            Value::Array(_) => 6,
+            Value::Null => 7,
+            Value::UserFunc { .. } => 8,
+            _ => todo!(),
         }
     }
 
@@ -436,114 +461,131 @@ impl fmt::Debug for Value {
     }
 }
 
-impl From<f64> for Value {
-    fn from(value: f64) -> Self {
-        Self::Float(value)
+#[derive(Debug, Clone)]
+pub struct ConvertionError {
+    expected: String,
+    found: String,
+}
+
+impl ConvertionError {
+    pub fn new<T: ToString>(expected: T, found: T) -> Self {
+        Self {
+            expected: expected.to_string(),
+            found: found.to_string(),
+        }
     }
 }
 
-impl From<i128> for Value {
-    fn from(value: i128) -> Self {
-        Self::Number(value)
+impl std::fmt::Display for ConvertionError {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            fmt,
+            "expected type '{}', found '{}'",
+            self.expected, self.found
+        )
     }
 }
 
-impl From<String> for Value {
-    fn from(value: String) -> Self {
-        Self::String(value)
+impl std::error::Error for ConvertionError {}
+
+impl TryFrom<f64> for Value {
+    type Error = ConvertionError;
+    fn try_from(value: f64) -> Result<Self, Self::Error> {
+        Ok(Self::Float(value))
     }
 }
 
-impl From<&str> for Value {
-    fn from(value: &str) -> Self {
-        Self::String(value.to_string())
+impl TryFrom<i128> for Value {
+    type Error = ConvertionError;
+    fn try_from(value: i128) -> Result<Self, Self::Error> {
+        Ok(Self::Number(value))
     }
 }
 
-impl From<char> for Value {
-    fn from(value: char) -> Self {
-        Self::Char(value)
+impl TryFrom<String> for Value {
+    type Error = ConvertionError;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Ok(Self::String(value))
     }
 }
 
-impl From<bool> for Value {
-    fn from(value: bool) -> Self {
-        Self::Bool(value)
+impl TryFrom<char> for Value {
+    type Error = ConvertionError;
+    fn try_from(value: char) -> Result<Self, Self::Error> {
+        Ok(Self::Char(value))
     }
 }
 
-impl From<()> for Value {
-    fn from(_: ()) -> Self {
-        Self::Void
+impl TryFrom<bool> for Value {
+    type Error = ConvertionError;
+    fn try_from(value: bool) -> Result<Self, Self::Error> {
+        Ok(Self::Bool(value))
     }
 }
 
-impl<T> From<Vec<T>> for Value
-where
-    Value: From<T>,
-{
-    fn from(value: Vec<T>) -> Self {
-        Self::Array(value.into_iter().map(Value::from).collect())
+impl TryFrom<&str> for Value {
+    type Error = ConvertionError;
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Ok(Self::String(value.to_string()))
     }
 }
 
-impl<T: Into<Value>> From<Option<T>> for Value {
-    fn from(value: Option<T>) -> Self {
+impl<T: TryInto<Value, Error = ConvertionError>> TryFrom<Option<T>> for Value {
+    type Error = ConvertionError;
+    fn try_from(value: Option<T>) -> Result<Self, Self::Error> {
         match value {
-            Some(t) => t.into(),
-            None => Self::Null,
+            Some(v) => v.try_into(),
+            None => Ok(Value::Null),
         }
     }
 }
 
 impl TryFrom<Value> for f64 {
-    type Error = String;
+    type Error = ConvertionError;
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value {
             Value::Float(n) => Ok(n),
-            _ => Err(format!(
-                "expected type 'float', found '{}'",
-                value.get_type()
-            )),
+            _ => Err(ConvertionError::new("float", value.get_type())),
         }
     }
 }
 
 impl TryFrom<Value> for i128 {
-    type Error = String;
+    type Error = ConvertionError;
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value {
             Value::Number(n) => Ok(n),
-            _ => Err(format!(
-                "expected type 'number', found '{}'",
-                value.get_type()
-            )),
+            _ => Err(ConvertionError::new("number", value.get_type())),
         }
     }
 }
 
 impl TryFrom<Value> for String {
-    type Error = String;
+    type Error = ConvertionError;
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         match &value {
             Value::String(s) => Ok(s.clone()),
-            _ => Err(format!(
-                "expected type 'string', found '{}'",
-                value.get_type()
-            )),
+            _ => Err(ConvertionError::new("string", value.get_type())),
         }
     }
 }
 
 impl TryFrom<Value> for bool {
-    type Error = String;
+    type Error = ConvertionError;
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value {
             Value::Bool(b) => Ok(b),
-            _ => Err(format!(
-                "expected type 'bool', found '{}'",
-                value.get_type()
-            )),
+            _ => Err(ConvertionError::new("bool", value.get_type())),
+        }
+    }
+}
+
+impl TryFrom<Value> for char {
+    type Error = ConvertionError;
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Char(c) => Ok(c),
+            _ => Err(ConvertionError::new("char", value.get_type())),
         }
     }
 }
@@ -578,6 +620,26 @@ impl ToString for Value {
             Value::UserFunc { .. } => "function".into(),
             Value::Void => '\0'.into(),
             r @ Value::Ref(_) => r.clone().read().unwrap().to_string(),
+        }
+    }
+}
+
+impl Value {
+    /// get a member field/function or fetch from the given context (parent context) to allow for
+    /// UFCS
+    pub fn get_member_field_or_context<'c>(
+        &self,
+        name: String,
+        parent_ctx: &'c Context,
+    ) -> Option<&'c Value> {
+        use crate::builtins::CTX_MAP;
+        let val_ctx = SyncLazy::force(CTX_MAP[self.get_index()]);
+        match val_ctx.get_def(name.clone()) {
+            s @ Some(_) => s,
+            None => match parent_ctx.get_def(name) {
+                s @ Some(Value::Func(..)) | s @ Some(Value::UserFunc { .. }) => s,
+                _ => None,
+            },
         }
     }
 }

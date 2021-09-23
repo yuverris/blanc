@@ -13,11 +13,17 @@ pub struct ArgHandler {
 }
 
 #[derive(Debug, Clone)]
+pub struct InFor {
+    ident: String,
+    iterable: Expression,
+}
+
+#[derive(Debug, Clone)]
 pub enum Expression {
     Binary(SourceLocation, Operator, Box<Self>, Box<Self>),
     Unary(SourceLocation, Operator, Box<Self>),
     FuncCall(SourceLocation, Box<Self>, Vec<ArgHandler>),
-    FuncDef(SourceLocation, String, Vec<ArgHandler>, Box<Self>),
+    FuncDef(SourceLocation, Option<String>, Vec<ArgHandler>, Box<Self>),
     Bool(SourceLocation, bool),
     Number(SourceLocation, i128),
     Float(SourceLocation, f64),
@@ -25,7 +31,7 @@ pub enum Expression {
     Variable(SourceLocation, String, Option<Box<Self>>, bool),
     IfStmt(SourceLocation, Box<Self>, Box<Self>, Option<Box<Self>>),
     WhileStmt(SourceLocation, Option<Box<Self>>, Box<Self>),
-    ForStmt(SourceLocation, Box<Self>, Box<Self>),
+    ForStmt(SourceLocation, Box<InFor>, Box<Self>),
     Block(SourceLocation, Vec<Self>),
     Array(SourceLocation, Vec<Self>),
     Subscript(SourceLocation, Box<Self>, Box<Self>),
@@ -56,15 +62,11 @@ impl<'a> Parser<'a> {
     }
 
     fn peek(&self, len: usize) -> Option<(SourceLocation, Token)> {
-        self.tokens.clone().nth(len).map(|c| c.clone())
+        self.tokens.clone().nth(len).cloned()
     }
 
     fn get(&mut self) -> (SourceLocation, Token) {
-        if let Some(o) = self.tokens.next() {
-            o.clone()
-        } else {
-            self.tokens.clone().last().unwrap().clone()
-        }
+        self.tokens.next().unwrap().clone()
     }
 
     fn advance(&mut self) -> (SourceLocation, Token) {
@@ -113,13 +115,21 @@ impl<'a> Parser<'a> {
                 ))
             }
             Token::Op(Operator::RParen) => {
-                let expr = self.expression(0)?;
-                match self.get() {
-                    (_, Token::LParen) => Ok(expr),
-                    (loc, _) => Err(Error::SyntaxError(
-                        loc,
-                        "expected closing parenthese ')' after expression".into(),
-                    )),
+                if !self.check_current(&Token::LParen) {
+                    let expr = self.expression(0)?;
+                    match self.get_without_consuming() {
+                        Some((_, Token::LParen)) => {
+                            self.advance();
+                            Ok(expr)
+                        }
+                        Some((loc, _)) => Err(Error::SyntaxError(
+                            loc,
+                            "expected closing parenthese ')' after expression".into(),
+                        )),
+                        _ => unreachable!(),
+                    }
+                } else {
+                    Ok(Expression::Null(loc))
                 }
             }
             Token::RBrace => self.parse_block_stmt(),
@@ -170,8 +180,13 @@ impl<'a> Parser<'a> {
                 in_loop = false;
                 out
             }
-            //Token::For => self.parse_for(loc),
-            Token::String(s) => Ok(Expression::String(loc, s.clone())),
+            Token::For => {
+                in_loop = true;
+                let out = self.parse_for(loc);
+                in_loop = false;
+                out
+            }
+            Token::String(s) => Ok(Expression::String(loc, s)),
             Token::Char(c) => Ok(Expression::Char(loc, c)),
             Token::Number(n) => Ok(Expression::Number(loc, n)),
             Token::Float(n) => Ok(Expression::Float(loc, n)),
@@ -218,8 +233,8 @@ impl<'a> Parser<'a> {
                 if op.precedence() <= precedence {
                     break;
                 }
+                self.advance();
                 if op.is_binary() {
-                    self.advance();
                     let rhs = self.expression(op.precedence())?;
 
                     lhs = Expression::Binary(loc.clone(), op.clone(), Box::new(lhs), Box::new(rhs));
@@ -227,7 +242,6 @@ impl<'a> Parser<'a> {
                     lhs = Expression::Unary(loc.clone(), op, Box::new(lhs));
                 } else if op == Operator::RParen {
                     let mut args = Vec::<ArgHandler>::new();
-                    self.advance();
 
                     if !self.check_current(&Token::LParen) {
                         loop {
@@ -325,13 +339,14 @@ impl<'a> Parser<'a> {
         while !self.check_current(&Token::LBrace) {
             let stmt = self.expression(0)?;
             if !self.check_current(&Token::Semicolon) {
+                self.advance();
                 return Err(Error::SyntaxError(
-                    self.get().0,
+                    self.get_without_consuming().unwrap().0,
                     "expected ';' after statement".to_string(),
                 ));
             }
+            stmts.push(stmt);
             self.advance();
-            stmts.push(stmt)
         }
         match self.get() {
             (loc, Token::LBrace) => Ok(Expression::Block(loc, stmts)),
@@ -357,24 +372,28 @@ impl<'a> Parser<'a> {
 
     fn parse_function(&mut self, loc: SourceLocation) -> error::Result<Expression> {
         let name = match self.advance() {
-            (_, Token::Ident(name)) => name,
+            (_, Token::Ident(name)) => Some(name),
+            (_, Token::Op(Operator::RParen)) => None,
             (loc, _) => {
                 return Err(Error::SyntaxError(
                     loc,
-                    "expected identifier after 'fnc' keyword".to_string(),
+                    "expected identifier or '(' after 'fnc' keyword".to_string(),
                 ))
             }
         };
-        match self.get_without_consuming() {
-            Some((_, Token::Op(Operator::RParen))) => self.advance(),
-            Some((loc, _)) => {
-                return Err(Error::SyntaxError(
-                    loc,
-                    "expected '(' after function name".to_string(),
-                ))
-            }
-            _ => unreachable!(),
-        };
+        if name.is_some() {
+            match self.get() {
+                (_, Token::Op(Operator::RParen)) => {
+                    self.advance();
+                }
+                (loc, _) => {
+                    return Err(Error::SyntaxError(
+                        loc,
+                        "expected '(' after function name".to_string(),
+                    ))
+                }
+            };
+        }
         let mut args: Vec<ArgHandler> = Vec::new();
         if !self.check_current(&Token::LParen) {
             loop {
@@ -387,7 +406,7 @@ impl<'a> Parser<'a> {
                         ) {
                             let value = match self.advance() {
                                 (_, Token::Op(Operator::Assign)) => Some(self.expression(0)?),
-                                (_, op) => unreachable!(),
+                                _ => unreachable!(),
                             };
                             args.push(ArgHandler {
                                 name: Some(ident),
@@ -427,14 +446,41 @@ impl<'a> Parser<'a> {
 
         let body = match self.advance() {
             (_, Token::RBrace) => self.parse_block_stmt()?,
+            (_, Token::Arrow) => self.expression(0)?,
             (loc, _) => {
                 return Err(Error::SyntaxError(
                     loc,
-                    "expected '{' after function declaration".to_string(),
+                    "expected '{' or '->' after function declaration".to_string(),
                 ));
             }
         };
         Ok(Expression::FuncDef(loc, name, args, Box::new(body)))
+    }
+
+    fn parse_for(&mut self, loc: SourceLocation) -> error::Result<Expression> {
+        let ident = match self.advance() {
+            (_, Token::Ident(s)) => s,
+            (loc, _) => return Err(Error::SyntaxError(loc, "expected identifier".to_string())),
+        };
+        match self.advance() {
+            (_, Token::In) => (),
+            (loc, _) => return Err(Error::SyntaxError(loc, "expected keyword 'in'".to_string())),
+        };
+        let iterable = self.expression(0)?;
+        let body = match self.advance() {
+            (_, Token::RBrace) => self.parse_block_stmt()?,
+            (loc, _) => {
+                return Err(Error::SyntaxError(
+                    loc,
+                    "expected '{' after for statement".to_string(),
+                ))
+            }
+        };
+        Ok(Expression::ForStmt(
+            loc,
+            Box::new(InFor { ident, iterable }),
+            Box::new(body),
+        ))
     }
 
     pub fn parse(&mut self) -> error::Result<Vec<Expression>> {

@@ -1,24 +1,23 @@
 use crate::{
-    builtins,
     context::Context,
     error::Error,
     lexer::Operator,
     parser::{ArgHandler, Expression},
     source_location::SourceLocation,
     try_err, try_return,
-    utils::{FloatExt, RResult},
-    value::{FunctionType, Value},
+    utils::RResult,
+    value::Value,
 };
 
-use std::{collections::HashMap, convert::TryFrom, lazy::SyncLazy, rc::Rc, string::ToString};
+use std::{convert::TryFrom, string::ToString};
 type ResultType = RResult<Value, Error, Value>;
 
 /// macro for converting std::result::Result to RResult
-macro_rules! unwrap_result {
+/*macro_rules! unwrap_result {
     ($expr:expr) => {
         match $expr {
             Result::Ok(v) => v,
-            Result::Err(err) => return ResultType::Err(err),
+            Result::Err(err) => return ResultType::Err(err.into()),
         }
     };
 }
@@ -43,7 +42,7 @@ macro_rules! unwrap_result_read {
             }
         }
     };
-}
+}*/
 
 /// main trait for defining callable objects
 pub trait Callable {
@@ -62,9 +61,17 @@ impl Callable for Value {
                 if _self.is_some() {
                     _args.insert(0, *_self.clone().unwrap());
                 }
-                let out =
-                    unwrap_result!(fnc(&_args[..]).map_err(|err| Error::RuntimeError(loc, err)));
-                ResultType::Ok(out)
+                let out = fnc(&_args[..], loc.clone());
+                match out {
+                    Ok(out) => ResultType::Ok(out),
+                    Err(err) => match err {
+                        berr if err.is::<Error>() => {
+                            let _err = berr.downcast::<crate::error::Error>().unwrap();
+                            ResultType::Err(*_err)
+                        }
+                        _ => ResultType::Err(Error::RuntimeError(loc, err.to_string())),
+                    },
+                }
             }
 
             Value::UserFunc { params, body } => {
@@ -78,19 +85,33 @@ impl Callable for Value {
                         ),
                     ));
                 }
+
+                for (param, arg) in params.iter().zip(args.iter()) {
+                    if let ArgHandler {
+                        name: Some(ident), ..
+                    } = arg
+                    {
+                        if param.name.as_ref().unwrap() != ident {
+                            return ResultType::Err(Error::RuntimeError(
+                                loc,
+                                format!("unexpected keyword argument '{}'", ident),
+                            ));
+                        }
+                    }
+                }
                 // store old state of the context and bind parameters names to the current context
                 // then reset the context to its old state after function call
                 let previous = eval.get_context_mut().clone();
-                let mut iter = args.iter();
+                let iter = args.iter();
                 let mut index = 0usize;
-                while let Some(arg) = iter.next() {
+                for arg in iter {
                     match arg {
                         ArgHandler {
                             name: Some(ident),
                             value: Some(expr),
                         } => {
                             let expr = try_err!(eval.eval_expr(&expr));
-                            eval.get_context_mut().var(ident, expr, false);
+                            eval.get_context_mut().def(ident, expr);
                             if params[index].name.as_ref().unwrap() == ident {
                                 index += 1;
                             }
@@ -100,11 +121,8 @@ impl Callable for Value {
                             value: Some(expr),
                         } => {
                             let expr = try_err!(eval.eval_expr(&expr));
-                            eval.get_context_mut().var(
-                                params[index].name.as_ref().unwrap().clone(),
-                                expr,
-                                false,
-                            );
+                            eval.get_context_mut()
+                                .def(params[index].name.as_ref().unwrap().clone(), expr);
                             index += 1;
                         }
                         _ => unreachable!(),
@@ -187,14 +205,8 @@ impl Eval {
             Expression::Bool(_, b) => Ok(Value::Bool(*b)),
             Expression::Null(_) => Ok(Value::Null),
             Expression::Ident(loc, i) => {
-                if let Some(f) = self.context.get_user_function(i.clone()) {
-                    Ok(f.clone())
-                } else if let Some(v) = self.context.get_mut_var(i.clone()) {
-                    let f = Value::Ref(v as *mut Value);
-
-                    Ok(f)
-                } else if let Some(f) = self.context.get_func(i.clone()) {
-                    Ok(Value::Func(f.clone(), None))
+                if let Some(v) = self.context.get_def(i.clone()) {
+                    Ok(v.clone())
                 } else {
                     Err(Error::RuntimeError(
                         loc.clone(),
@@ -211,8 +223,12 @@ impl Eval {
                     params: args.clone(),
                     body: body.clone(),
                 };
-                self.context.user_function(name.clone(), function);
-                Ok(Value::Null)
+                if let Some(name) = name {
+                    self.context.def(name.clone(), function);
+                    Ok(Value::Null)
+                } else {
+                    Ok(function)
+                }
             }
             Expression::Unary(loc, Operator::Negative, box expr) => {
                 let temp = try_err!(self.eval_expr(expr));
@@ -448,12 +464,12 @@ impl Eval {
                 self.index(lhs, inner, loc.clone())
             }
 
-            Expression::Variable(_, name, value, immutable) => {
+            Expression::Variable(_, name, value, _) => {
                 let value = match value {
                     Some(expr) => try_err!(self.eval_expr(expr)),
                     None => Value::Null,
                 };
-                self.context.var(name, value, *immutable);
+                self.context.def(name, value);
                 Ok(Value::Null)
             }
 
@@ -591,7 +607,7 @@ impl Eval {
                 let index = usize::try_from(n)
                     .map_err(|_| Error::TypeError(loc.clone(), "value overflowed".to_string()));
                 match index {
-                    std::result::Result::Ok(v) => Ok(array[v].clone()),
+                    std::result::Result::Ok(v) => Ok(Value::Ref(&mut array[v] as *mut _)),
                     std::result::Result::Err(err) => Err(err),
                 }
             }
@@ -609,18 +625,19 @@ impl Eval {
     // TODO: support ufcs, use a map to map Values to their context instead of match
     pub fn member_access(&mut self, lhs: Value, rhs: String, loc: SourceLocation) -> ResultType {
         use RResult::*;
-        match &lhs {
-            value @ Value::Number(_) => {
-                let ctx = SyncLazy::force(&builtins::NUM_CONTEXT);
-                if let Some(f) = ctx.get_func(rhs.clone()) {
-                    Ok(Value::Func(f.clone(), Some(Box::new(value.clone()))))
-                } else if let Some(v) = ctx.get_var(rhs.clone()) {
-                    Ok(v.clone())
-                } else {
-                    Ok(Value::Null)
-                }
-            }
-            _ => todo!(),
+        match lhs.get_member_field_or_context(rhs.clone(), &self.context) {
+            Some(s) => match s {
+                Value::Func(f, None) => Ok(Value::Func(f.clone(), Some(Box::new(lhs.clone())))),
+                _ => Ok(s.clone()),
+            },
+            None => Err(Error::Error(
+                loc,
+                format!(
+                    "no field/method named '{}' exists in '{}'",
+                    rhs,
+                    lhs.get_type()
+                ),
+            )),
         }
     }
 

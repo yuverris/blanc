@@ -1,0 +1,117 @@
+// expectations of future features and cool stuff
+
+let arr = (3 => 100);
+arr.map(lm x -> x.pow()).filter(lm x -> x % 3 == 0).sum();
+// or
+arr.map(_1.pow()).filter(_1 % 3 == 0).sum();
+
+
+fnc packs(args...) {
+    print('[', ...args, ']');
+};
+
+packs(...[1,2,3,5,7,8,9]);
+
+for i in (1 => 100).step_by(3) {
+    print(i);
+};
+
+struct Point3 {
+    x,
+        y,
+        z
+};
+
+// not yet implemented maybe subject to change
+let Point3 = Object.new {
+    "new": fnc(self, x, y, z) -> {
+        self.x = x;
+        self.y = y;
+        self.z = z;
+    },
+    '+': fnc(self, other) -> Point3.new(self.x + other.x, self.y+other.y, self.z+other.z)
+
+};
+
+let p1 = Point3.new(1, 2, 3);
+let p2 = Point3.new(4, 5, 6);
+let total = p1 + p2;
+print(total); // x: 5, y: 7, z: 9
+
+
+"hello".print(); // UFCS
+
+fnc greet(name) {
+    print("hello,", name, "nice to meet you !!");
+};
+
+greet("john");
+"john".greet();
+
+
+// namespaces
+ns epik {
+    fnc get() {
+        return random(1, 100);
+    };
+};
+epik.get().print();
+
+
+// modules
+exp struct IpAddr {
+    address,
+        port
+};
+
+// later
+let net = imp("net.blanc");
+let addr = net.IpAddr { address: "localhost", port: 9000 };
+
+
+// imports
+imp "std:meta"; // imports from built-in headers
+imp "hello.blanc"; // local imports
+
+
+// FFI example
+imp "std:ffi";
+imp "std:libc";
+/* example.rs
+#[no_mangle]
+fn say_hello() {
+println!("hello");
+}
+ */
+let path = "./example.bin";
+let mod = ffi.load_module(path);
+let say_hello = ffi.get("say_hello").bind_fnc([], libc.void);
+say_hello(); // hello
+
+for i in 0..5 {
+    print(i);
+};
+
+for i in 0..5, let i = i*3 {
+    print(5);
+};
+
+
+let range = Object.new({
+    "new": fnc(self, min, max) -> {
+        self.min = min;
+        self.max = max;
+    },
+    "next": fnc(self) -> {
+        if self.min >= self.max {
+            return Iter.End;
+        } else {
+            self.min += 1;
+            return self.min;
+        };
+    },
+});
+
+for i in range.new(0, 10) {
+    print(i);
+}

@@ -53,11 +53,11 @@ impl std::fmt::Display for Error {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             fmt,
-            "in '<{}>', line: {}, column: {}\n{:?}: {}",
+            "in '<{}>', line: {}, column: {}\n{}: {}",
             self.location
                 .file
                 .as_ref()
-                .map(|s| s.clone())
+                .cloned()
                 .unwrap_or_else(|| "unkown".to_string()),
             self.location.line,
             self.location.column,
@@ -69,7 +69,7 @@ impl std::fmt::Display for Error {
 
 impl std::fmt::Display for Kind {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(fmt, "{}", self)
+        write!(fmt, "{:?}", self)
     }
 }
 
@@ -88,7 +88,7 @@ pub(crate) fn format_err(err: Error, input: String) -> String {
     let lines: Vec<&str> = input.lines().collect();
     let filled = format!("{}{}", low_line.repeat(loc.column), upper_line);
     // in case the input was a single line
-    let index = if loc.line == 1 { 0 } else { loc.line - 1 };
+    let index = if loc.line == 1 { 0 } else { loc.line };
     let formatted_input = format!("{}\n{}", lines[index], filled);
 
     format!("{}\n\n{}", err.to_string(), formatted_input)

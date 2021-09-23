@@ -46,13 +46,7 @@ pub fn evaluate(
     file: Option<String>,
     context: Option<crate::context::Context>,
 ) -> crate::utils::RResult<String, String, ()> {
-    use crate::{
-        error::{format_err, Error},
-        eval::Eval,
-        lexer::Lexer,
-        parser::Parser,
-        utils::RResult::*,
-    };
+    use crate::{error::format_err, eval::Eval, lexer::Lexer, parser::Parser, utils::RResult::*};
     let mut lexer = Lexer::new(input.clone(), file);
     let tokens = lexer.lex().map_err(|err| err.to_string());
     let tokens = match tokens {
@@ -63,7 +57,7 @@ pub fn evaluate(
     let mut parser = Parser::new(iter);
     let parsed = match parser.parse() {
         Result::Ok(out) => out,
-        Result::Err(err) => return Err(format_err(err, input.clone())),
+        Result::Err(err) => return Err(format_err(err, input)),
     };
     let mut eval = match context {
         Some(ctx) => Eval::with_context(parsed, ctx),
@@ -74,5 +68,13 @@ pub fn evaluate(
         Ok(result) => Ok(result.to_string()),
         Err(err) => Err(format_err(err, input)),
         Return(_) => unreachable!(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[bench]
+    fn parse_n_eval() {
+        super::evaluate("5+5;", None, None);
     }
 }

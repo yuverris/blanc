@@ -144,3 +144,40 @@ macro_rules! try_err {
         }
     };
 }
+
+pub enum Either<T, U> {
+    Right(T),
+    Left(U),
+}
+
+/*impl<T, U> Either<T, U> {
+    pub fn is_right(&self) -> bool {
+        matches!(self, Self::Right(_))
+    }
+
+    pub fn is_left(&self) -> bool {
+        matches!(self, Self::Left(_))
+    }
+
+    pub fn map_right<F, E>(&self, func: F) -> Either<E, U>
+    where
+        F: Fn(T) -> E,
+    {
+        if self.is_right() {
+            Self::Right(func(self.unwrap_right()))
+        } else {
+            self
+        }
+    }
+
+    pub fn map_left<F, I>(&self, func: F) -> Either<T, U>
+    where
+        F: Fn(U) -> I,
+    {
+        if self.is_left() {
+            Self::Left(func(self.unwrap_left()))
+        } else {
+            self
+        }
+    }
+}*/

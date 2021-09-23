@@ -53,6 +53,15 @@ fnc get_2() {
     return 2;
 };
 print(get_1() + get_2());
+
+// or
+
+let get_1 = fnc() -> 1;
+let get_2 = fnc() -> 2;
+print(get_1() + get_2());
+
+// or
+(get_1() + get_2()).print();
 ```
 
 blanc also supports keyword argumnets as `arg: value`
@@ -98,4 +107,13 @@ print("x =", x);
 `note` break, continue statements are not supported yet
 
 
-and that's all for now.
+## Philosophy
+**Here is our bloat take it or leave it**
+no bold claims about replacing or tending to extend other languages
+
+## Builtins
+### Functions
+`print`: accepts infinity amount of args and prints them to stdout separated by space
+`prompt`: accepts a single argument of type of string, print it then read from stdin and returns the input as string
+`time`: returns the amount of time elapsed from unix epoch
+
