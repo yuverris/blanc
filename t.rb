@@ -1,0 +1,2 @@
+x = gets
+puts x

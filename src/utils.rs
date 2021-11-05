@@ -19,7 +19,7 @@ where
 }
 
 /// Enum for handling Ok, Err and Return values
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum RResult<T, E, U> {
     Ok(T),
     Err(E),

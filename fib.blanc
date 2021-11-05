@@ -1,0 +1,18 @@
+fnc fib() {
+    let n1 = 0;
+    let n2 = 1;
+    let loop = 0;
+    let nth = 0;
+    while loop <= 100000000 {
+        while n1 <= 1e17 {
+            nth = n1+n2;
+            n1 = n2;
+            n2 = nth;
+        };
+        n1 = 0;
+        n2 = 1;
+        nth = n1+n2;
+        loop += 1;
+    };
+};
+fib();

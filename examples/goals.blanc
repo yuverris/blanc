@@ -115,3 +115,10 @@ let range = Object.new({
 for i in range.new(0, 10) {
     print(i);
 }
+
+let x = try {
+        return random();
+    catch {
+        return 69;
+    }
+};

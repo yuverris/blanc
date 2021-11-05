@@ -57,7 +57,7 @@ pub fn evaluate(
     let mut parser = Parser::new(iter);
     let parsed = match parser.parse() {
         Result::Ok(out) => out,
-        Result::Err(err) => return Err(format_err(err, input)),
+        Result::Err(err) => return Err(err.to_string()),
     };
     let mut eval = match context {
         Some(ctx) => Eval::with_context(parsed, ctx),
@@ -66,7 +66,7 @@ pub fn evaluate(
     // TODO: new way of handling source location
     match eval.eval() {
         Ok(result) => Ok(result.to_string()),
-        Err(err) => Err(format_err(err, input)),
+        Err(err) => Err(err.to_string()),
         Return(_) => unreachable!(),
     }
 }

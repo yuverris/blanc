@@ -37,6 +37,7 @@ pub enum Value {
     Func(FunctionType, Option<Box<Value>>),
     /// for representing user defined functions
     UserFunc {
+        _self: Option<Box<Value>>,
         params: Vec<ArgHandler>,
         body: Expression,
     },
@@ -114,6 +115,27 @@ impl FloatExt for f64 {
     }
 }
 
+#[derive(Debug, Clone)]
+struct InvalidType {
+    message: String,
+    type1: Option<String>,
+    type2: Option<String>,
+}
+
+impl std::fmt::Display for InvalidType {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use std::fmt::Write;
+        let mut s = String::new();
+        write!(s, "{}", self.message)?;
+        if let Some(type1) = &self.type1 {
+            write!(s, ": {}", type1)?;
+        } else if let Some(type2) = &self.type2 {
+            write!(s, " and {}", type2)?;
+        }
+        write!(fmt, "{}", s)
+    }
+}
+
 impl Value {
     pub fn get_type(&self) -> &'static str {
         match &self {
@@ -143,12 +165,12 @@ impl Value {
             Value::Array(_) => 6,
             Value::Null => 7,
             Value::UserFunc { .. } => 8,
+            &r @ Value::Ref(_) => r.clone().read().unwrap().get_index(),
             _ => todo!(),
         }
     }
 
-    /// reads the inner type of a Reference to avoid reading destroyed values, return self if self
-    /// isn't a reference
+    /// who gives a shit if it points to an invalid shit
     pub fn read(self) -> Result<Value, &'static str> {
         match self {
             Value::Ref(ptr) => {
@@ -210,13 +232,13 @@ impl Sub for Value {
         match (self, value) {
             (Value::Number(n), Value::Number(u)) => {
                 Ok(Value::Number(n.checked_sub(u).ok_or_else(|| {
-                    "sub operation results in overflow".to_string()
+                    "sub operation results in underflow".to_string()
                 })?))
             }
 
             (Value::Float(n), Value::Float(u)) => {
                 Ok(Value::Float(n.checked_sub(u).ok_or_else(|| {
-                    "sub operation results in overflow".to_string()
+                    "sub operation results in underflow".to_string()
                 })?))
             }
 
@@ -266,13 +288,13 @@ impl Div for Value {
         match (self, value) {
             (Value::Number(n), Value::Number(u)) => {
                 Ok(Value::Number(n.checked_div(u).ok_or_else(|| {
-                    "div operation results in overflow".to_string()
+                    "div operation results in underflow".to_string()
                 })?))
             }
 
             (Value::Float(n), Value::Float(u)) => {
                 Ok(Value::Float(n.checked_div(u).ok_or_else(|| {
-                    "division operation results in overflow".to_string()
+                    "division operation results in underflow".to_string()
                 })?))
             }
 
@@ -586,6 +608,16 @@ impl TryFrom<Value> for char {
         match value {
             Value::Char(c) => Ok(c),
             _ => Err(ConvertionError::new("char", value.get_type())),
+        }
+    }
+}
+
+impl TryFrom<Value> for Vec<Value> {
+    type Error = ConvertionError;
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Array(arr) => Ok(arr),
+            _ => Err(ConvertionError::new("array", value.get_type())),
         }
     }
 }

@@ -74,14 +74,23 @@ impl Callable for Value {
                 }
             }
 
-            Value::UserFunc { params, body } => {
-                if params.len() != args.len() {
+            Value::UserFunc {
+                _self,
+                params,
+                body,
+            } => {
+                let total_len = if _self.is_some() {
+                    args.len() + 1
+                } else {
+                    args.len()
+                };
+                if params.len() != total_len {
                     return ResultType::Err(Error::RuntimeError(
                         loc,
                         format!(
                             "function requires {} arguments, you supplied {}",
                             params.len(),
-                            args.len()
+                            total_len
                         ),
                     ));
                 }
@@ -102,8 +111,18 @@ impl Callable for Value {
                 // store old state of the context and bind parameters names to the current context
                 // then reset the context to its old state after function call
                 let previous = eval.get_context_mut().clone();
+
                 let iter = args.iter();
+
                 let mut index = 0usize;
+
+                if let Some(box _self) = _self {
+                    let p = params.iter().next().unwrap();
+                    eval.get_context_mut()
+                        .def(p.name.clone().unwrap(), _self.clone());
+                    index += 1;
+                }
+
                 for arg in iter {
                     match arg {
                         ArgHandler {
@@ -132,6 +151,8 @@ impl Callable for Value {
                 eval.set_context(previous);
                 out
             }
+
+            r @ Value::Ref(_) => r.clone().read().unwrap().call(args, loc, eval),
 
             _ => ResultType::Err(Error::TypeError(
                 loc,
@@ -205,8 +226,8 @@ impl Eval {
             Expression::Bool(_, b) => Ok(Value::Bool(*b)),
             Expression::Null(_) => Ok(Value::Null),
             Expression::Ident(loc, i) => {
-                if let Some(v) = self.context.get_def(i.clone()) {
-                    Ok(v.clone())
+                if let Some(v) = self.context.get_mut_def(i.clone()) {
+                    Ok(Value::Ref(v as *mut Value))
                 } else {
                     Err(Error::RuntimeError(
                         loc.clone(),
@@ -220,6 +241,7 @@ impl Eval {
             }
             Expression::FuncDef(_, name, args, box body) => {
                 let function = Value::UserFunc {
+                    _self: None,
                     params: args.clone(),
                     body: body.clone(),
                 };
@@ -250,16 +272,46 @@ impl Eval {
 
             Expression::Binary(loc, Operator::Plus, box lhs, box rhs) => {
                 let temp_lhs = try_err!(self.eval_expr(lhs));
+                let temp_lhs = temp_lhs.read().unwrap();
                 let temp_rhs = try_err!(self.eval_expr(rhs));
+                let temp_rhs = temp_rhs.read().unwrap();
                 match temp_lhs + temp_rhs {
                     Result::Ok(v) => Ok(v),
                     Result::Err(err) => Err(Error::Error(loc.clone(), err)),
                 }
             }
 
-            Expression::Binary(loc, Operator::Minus, box lhs, box rhs) => {
+            Expression::Binary(loc, Operator::PlusAssign, box lhs, box rhs) => {
                 let temp_lhs = try_err!(self.eval_expr(lhs));
                 let temp_rhs = try_err!(self.eval_expr(rhs));
+                let temp_rhs = temp_rhs.read().unwrap();
+                let mut var = match &temp_lhs {
+                    r @ &Value::Ref(_) => r.clone(),
+                    _ => {
+                        return Err(Error::RuntimeError(
+                            loc.clone(),
+                            "invalid left type of assignement expression".to_string(),
+                        ))
+                    }
+                };
+                let expr = match temp_lhs.read().unwrap() + temp_rhs {
+                    Result::Ok(v) => v,
+                    Result::Err(err) => return Err(Error::Error(loc.clone(), err)),
+                };
+                match var.set_ref(expr) {
+                    Result::Ok(_) => (),
+                    Result::Err(err) => {
+                        return Err(Error::RuntimeError(loc.clone(), err.to_string()))
+                    }
+                };
+                Ok(Value::Null)
+            }
+
+            Expression::Binary(loc, Operator::Minus, box lhs, box rhs) => {
+                let temp_lhs = try_err!(self.eval_expr(lhs));
+                let temp_lhs = temp_lhs.read().unwrap();
+                let temp_rhs = try_err!(self.eval_expr(rhs));
+                let temp_rhs = temp_rhs.read().unwrap();
                 match temp_lhs - temp_rhs {
                     Result::Ok(v) => Ok(v),
                     Result::Err(err) => Err(Error::Error(loc.clone(), err)),
@@ -268,11 +320,39 @@ impl Eval {
 
             Expression::Binary(loc, Operator::Star, box lhs, box rhs) => {
                 let temp_lhs = try_err!(self.eval_expr(lhs));
+                let temp_lhs = temp_lhs.read().unwrap();
                 let temp_rhs = try_err!(self.eval_expr(rhs));
+                let temp_rhs = temp_rhs.read().unwrap();
                 match temp_lhs * temp_rhs {
                     Result::Ok(v) => Ok(v),
                     Result::Err(err) => Err(Error::Error(loc.clone(), err)),
                 }
+            }
+
+            Expression::Binary(loc, Operator::StarAssign, box lhs, box rhs) => {
+                let temp_lhs = try_err!(self.eval_expr(lhs));
+                let temp_rhs = try_err!(self.eval_expr(rhs));
+                let temp_rhs = temp_rhs.read().unwrap();
+                let mut var = match &temp_lhs {
+                    r @ &Value::Ref(_) => r.clone(),
+                    _ => {
+                        return Err(Error::RuntimeError(
+                            loc.clone(),
+                            "invalid left type of assignement expression".to_string(),
+                        ))
+                    }
+                };
+                let expr = match temp_lhs.read().unwrap() * temp_rhs {
+                    Result::Ok(v) => v,
+                    Result::Err(err) => return Err(Error::Error(loc.clone(), err)),
+                };
+                match var.set_ref(expr) {
+                    Result::Ok(_) => (),
+                    Result::Err(err) => {
+                        return Err(Error::RuntimeError(loc.clone(), err.to_string()))
+                    }
+                };
+                Ok(Value::Null)
             }
 
             Expression::Binary(loc, Operator::Slash, box lhs, box rhs) => {
@@ -412,13 +492,17 @@ impl Eval {
 
             Expression::Binary(_, Operator::Less, box lhs, box rhs) => {
                 let temp_lhs = try_err!(self.eval_expr(lhs));
+                let temp_lhs = temp_lhs.read().unwrap();
                 let temp_rhs = try_err!(self.eval_expr(rhs));
+                let temp_rhs = temp_rhs.read().unwrap();
                 Ok(Value::Bool(temp_lhs < temp_rhs))
             }
 
             Expression::Binary(_, Operator::LessOrEqual, box lhs, box rhs) => {
                 let temp_lhs = try_err!(self.eval_expr(lhs));
+                let temp_lhs = temp_lhs.read().unwrap();
                 let temp_rhs = try_err!(self.eval_expr(rhs));
+                let temp_rhs = temp_rhs.read().unwrap();
                 Ok(Value::Bool(temp_lhs <= temp_rhs))
             }
 
@@ -428,6 +512,7 @@ impl Eval {
                 let temp_lhs = try_err!(self.eval_expr(lhs));
                 let temp_rhs = match rhs {
                     Expression::Ident(_, name) => name.clone(),
+                    Expression::String(_, s) => s.clone(),
                     _ => {
                         return Err(Error::SyntaxError(
                             loc.clone(),
@@ -439,6 +524,7 @@ impl Eval {
             }
             Expression::Binary(loc, Operator::Assign, box lhs, box rhs) => {
                 let expr = try_err!(self.eval_expr(rhs));
+                let expr = expr.read().unwrap();
                 let target = try_err!(self.eval_expr(lhs));
                 let mut var = match target {
                     r @ Value::Ref(_) => r,
@@ -464,6 +550,7 @@ impl Eval {
                 self.index(lhs, inner, loc.clone())
             }
 
+            // TODO: implicit copy if the vqlue is a reference to avoid pointing to garbage values
             Expression::Variable(_, name, value, _) => {
                 let value = match value {
                     Some(expr) => try_err!(self.eval_expr(expr)),
@@ -562,22 +649,26 @@ impl Eval {
                             };
                             if !cond {
                                 break;
-                            }
-                            for expr in body_exprs {
-                                match expr {
-                                    Expression::Return(_, box expr) => {
-                                        let item = try_return!(self.eval_expr(expr));
-                                        return Return(item);
-                                    }
-                                    Expression::Break(_) => {
-                                        break 'l;
-                                    }
-                                    Expression::Continue(_) => continue,
-                                    _ => try_return!(self.eval_expr(expr)),
-                                };
+                            } else {
+                                for expr in body_exprs {
+                                    match expr {
+                                        Expression::Return(_, box expr) => {
+                                            let item = try_return!(self.eval_expr(expr));
+                                            return Return(item);
+                                        }
+                                        Expression::Break(_) => {
+                                            break 'l;
+                                        }
+                                        Expression::Continue(_) => continue,
+                                        expr => {
+                                            let out = self.eval_expr(expr);
+                                            try_return!(out)
+                                        }
+                                    };
+                                }
                             }
                         }
-                        Ok(Value::Void)
+                        Ok(Value::Null)
                     }
                     None => loop {
                         try_return!(self.eval_expr(body));
@@ -585,13 +676,60 @@ impl Eval {
                 }
             }
 
+            Expression::ForStmt(loc, box cond, box body) => {
+                // just a shitty workaround to make things work for a while
+                let target = try_err!(self.eval_expr(&cond.iterable));
+                let target = target.read().unwrap();
+                let inner = match target {
+                    Value::Array(array) => array,
+                    _ => {
+                        return Err(Error::RuntimeError(
+                            loc.clone(),
+                            format!("{} isn't iterable", target.get_type()),
+                        ))
+                    }
+                };
+                for i in inner {
+                    self.context.def(cond.ident.clone(), i);
+                    try_return!(self.eval_expr(body));
+                }
+                Ok(Value::Null)
+            }
+
             _ => panic!("invalid expression"), // let it panic for now
         }
     }
-
+    // TODO: call value's `[]` operator overload
     pub fn index(&self, lhs: Value, index: Value, loc: SourceLocation) -> ResultType {
         use RResult::*;
+        let index = index.read().unwrap();
         match (&lhs, &index) {
+            (Value::Ref(ptr), Value::Number(n)) => {
+                if let Value::Array(array) = unsafe { ptr.as_mut().unwrap() } {
+                    if *n >= (array.len() as i128) || n.abs() > (array.len() as i128) {
+                        return Err(Error::RuntimeError(
+                            loc,
+                            format!("out of bounds index {}", n.to_string()),
+                        ));
+                    }
+                    let n = if *n < 0 {
+                        (array.len() as i128) - n.abs()
+                    } else {
+                        *n
+                    };
+                    let index = usize::try_from(n)
+                        .map_err(|_| Error::TypeError(loc.clone(), "value overflowed".to_string()));
+                    match index {
+                        std::result::Result::Ok(v) => {
+                            Ok(Value::Ref(array.get_mut(v).unwrap() as *mut _))
+                        }
+                        std::result::Result::Err(err) => Err(err),
+                    }
+                } else {
+                    Ok(Value::Null)
+                }
+            }
+
             (Value::Array(array), Value::Number(n)) => {
                 if *n >= (array.len() as i128) || n.abs() > (array.len() as i128) {
                     return Err(Error::RuntimeError(
@@ -607,7 +745,7 @@ impl Eval {
                 let index = usize::try_from(n)
                     .map_err(|_| Error::TypeError(loc.clone(), "value overflowed".to_string()));
                 match index {
-                    std::result::Result::Ok(v) => Ok(Value::Ref(&mut array[v] as *mut _)),
+                    std::result::Result::Ok(v) => Ok(array[v].clone()),
                     std::result::Result::Err(err) => Err(err),
                 }
             }
@@ -622,12 +760,20 @@ impl Eval {
         }
     }
 
-    // TODO: support ufcs, use a map to map Values to their context instead of match
     pub fn member_access(&mut self, lhs: Value, rhs: String, loc: SourceLocation) -> ResultType {
         use RResult::*;
         match lhs.get_member_field_or_context(rhs.clone(), &self.context) {
             Some(s) => match s {
                 Value::Func(f, None) => Ok(Value::Func(f.clone(), Some(Box::new(lhs.clone())))),
+                Value::UserFunc {
+                    _self,
+                    params,
+                    body,
+                } => Ok(Value::UserFunc {
+                    _self: Some(Box::new(lhs)),
+                    params: params.clone(),
+                    body: body.clone(),
+                }),
                 _ => Ok(s.clone()),
             },
             None => Err(Error::Error(

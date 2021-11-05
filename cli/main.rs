@@ -1,11 +1,58 @@
 use blanc::utils::RResult;
+use colored::Colorize;
+use std::borrow::Cow::{self, Owned};
+
+use rustyline::highlight::Highlighter;
+use rustyline::hint::{Hinter, HistoryHinter};
+use rustyline::validate::{self, MatchingBracketValidator, Validator};
+use rustyline::{Context, Editor};
+use rustyline_derive::{Completer, Helper};
+
+#[derive(Helper, Completer)]
+struct BHelper {
+    validator: MatchingBracketValidator,
+    hinter: HistoryHinter,
+}
+
+impl Hinter for BHelper {
+    type Hint = String;
+
+    fn hint(&self, line: &str, pos: usize, ctx: &Context<'_>) -> Option<String> {
+        self.hinter.hint(line, pos, ctx)
+    }
+}
+
+impl Validator for BHelper {
+    fn validate(
+        &self,
+        ctx: &mut validate::ValidationContext,
+    ) -> rustyline::Result<validate::ValidationResult> {
+        self.validator.validate(ctx)
+    }
+
+    fn validate_while_typing(&self) -> bool {
+        self.validator.validate_while_typing()
+    }
+}
+
+impl Highlighter for BHelper {
+    fn highlight_hint<'h>(&self, hint: &'h str) -> Cow<'h, str> {
+        Owned(hint.bright_black().to_string())
+    }
+}
+
 fn repl() -> std::io::Result<()> {
     use blanc::{eval::Eval, lexer::Lexer, parser::Parser};
     println!(
         "blanc repl session.\nblanc version: {}\ntype 'quit' or Ctrl-C to terminate this session\n",
         blanc::VERSION
     );
-    let mut rl = rustyline::Editor::<()>::new();
+    let hl = BHelper {
+        validator: MatchingBracketValidator::new(),
+        hinter: HistoryHinter {},
+    };
+    let mut rl = Editor::<BHelper>::new();
+    rl.set_helper(Some(hl));
     let mut eval = Eval::new_empty();
     loop {
         let mut input = match rl.readline("in: ") {

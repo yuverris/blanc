@@ -14,8 +14,8 @@ pub struct ArgHandler {
 
 #[derive(Debug, Clone)]
 pub struct InFor {
-    ident: String,
-    iterable: Expression,
+    pub(crate) ident: String,
+    pub(crate) iterable: Expression,
 }
 
 #[derive(Debug, Clone)]
@@ -40,6 +40,7 @@ pub enum Expression {
     Char(SourceLocation, char),
     Break(SourceLocation),
     Continue(SourceLocation),
+    Throw(SourceLocation, Box<Self>),
     Null(SourceLocation),
 }
 
@@ -282,7 +283,6 @@ impl<'a> Parser<'a> {
 
                     lhs = Expression::FuncCall(loc.clone(), Box::new(lhs), args);
                 } else if op == Operator::RBracket {
-                    self.advance();
                     let inner = self.expression(0)?;
                     lhs = match self.get_without_consuming() {
                         Some((loc, Token::LBracket)) => {
@@ -382,10 +382,8 @@ impl<'a> Parser<'a> {
             }
         };
         if name.is_some() {
-            match self.get() {
-                (_, Token::Op(Operator::RParen)) => {
-                    self.advance();
-                }
+            match self.advance() {
+                (_, Token::Op(Operator::RParen)) => {}
                 (loc, _) => {
                     return Err(Error::SyntaxError(
                         loc,

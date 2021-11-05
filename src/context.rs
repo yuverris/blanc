@@ -2,7 +2,7 @@ use crate::source_location::SourceLocation;
 use crate::value::{ConvertionError, FunctionType, Value};
 use std::error::Error;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     convert::{TryFrom, TryInto},
     rc::Rc,
 };
@@ -71,6 +71,33 @@ impl Context {
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .map(|d| d.as_secs_f64())?)
         });
+        ctx.def(
+            "line",
+            Value::Func(
+                Rc::new(&|_: &[Value], loc: SourceLocation| -> FResult<Value> {
+                    Ok(Value::Number(loc.line as i128))
+                }),
+                None,
+            ),
+        );
+        ctx.def(
+            "column",
+            Value::Func(
+                Rc::new(&|_: &[Value], loc: SourceLocation| -> FResult<Value> {
+                    Ok(Value::Number(loc.column as i128))
+                }),
+                None,
+            ),
+        );
+        ctx.def(
+            "file",
+            Value::Func(
+                Rc::new(&|_: &[Value], loc: SourceLocation| -> FResult<Value> {
+                    Ok(loc.file.map(|f| Value::String(f)).unwrap_or(Value::Null))
+                }),
+                None,
+            ),
+        );
         ctx
     }
 
@@ -128,9 +155,9 @@ impl Context {
 
     /// Returns a new Context that contains definitions that aren't present in both context, useful
     /// for getting a single block's definitions excluding parent's definition
-    pub fn difference(&self, other: &Context) -> Context {
+    /*pub fn difference(&self, other: &Context) -> Context {
         Context { defs: self.defs }
-    }
+    }*/
 
     /// Adds a new function
     ///
