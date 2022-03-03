@@ -1,5 +1,5 @@
 # blanc
-yet another (WIP) programming language
+yet another ~~(WIP)~~ programming language
 
 ## Example
 ```blanc
@@ -120,4 +120,4 @@ no bold claims about replacing or tending to extend other languages
 `time`: returns the amount of time elapsed from unix epoch
 
 
-### everything is fucked!!!!
+### everything is spaghetti!!!
