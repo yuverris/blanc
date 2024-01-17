@@ -121,3 +121,5 @@ no bold claims about replacing or tending to extend other languages
 
 
 ### everything is spaghetti!!!
+# TODO
+- use a VM instead smh
