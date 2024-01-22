@@ -1,6 +1,9 @@
 # blanc
 yet another ~~(WIP)~~ programming language
 
+# TODO
+- use a VM instead smh
+
 ## Example
 ```blanc
 print("hello, world!");
@@ -120,6 +123,4 @@ no bold claims about replacing or tending to extend other languages
 `time`: returns the amount of time elapsed from unix epoch
 
 
-### everything is spaghetti!!!
-# TODO
-- use a VM instead smh
+
